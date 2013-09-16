@@ -20,10 +20,10 @@ import DistWTG
 reload(DistWTG)
 from DistWTG import *
 
-#import copy as copy
 
 Nturbine = 4
 Nshooting = 50
+Nsimulation = 50
 
 ScaleT = 1e-4
 
@@ -52,13 +52,13 @@ betamin = -3
 dbetamax = 7
 Powmax = 5
 
-PowerSmoothingWeight = 1e-2
+PowerSmoothingWeight = 1.
 
 W3 = R*Ogmax/lambdaOpt/N
 
 W0 = 8.
 
-
+dt = 0.2
 
 
 
@@ -88,18 +88,20 @@ lambda_       = 9.
 kwind         = 3.
 TauWind       = 600.
 
-#plt.figure()
-#plt.hold('on')
-Wact = []
+plt.figure()
+plt.hold('on')
+WProfiles = []
 for k in range(Nturbine):
     #a,_ = GenWind(lambda_, kwind, TauWind,Nshooting)
     Wk = [W0]
-    for k in range(Nshooting):
-        Wk.append(Wk[-1] + rand.normalvariate(0,5e-2))
-    #plt.plot(Wk)
-    
-    Wact.append(Wk)
-##plt.show()
+    for k in range(Nsimulation+Nshooting):
+        Wk.append(Wk[-1] + rand.normalvariate(0,2e-1) + 1e-1*(8. - Wk[-1]))    
+    WProfiles.append(Wk)
+    plt.plot(Wk)
+
+plt.show()
+raw_input()
+plt.close()
 
 T = Turbine(Inputs = ['dbeta', 'Tg'], States = ['Og', 'beta'])
 
@@ -131,7 +133,9 @@ dOg = (Tr/N-T.Inputs['Tg']/ScaleT)/(Ig + Ir/N/N)
 
 RHS = [dOg,T.Inputs['dbeta']]
 
-T.setDynamics(RHS)
+T.setDynamics(RHS, dt = dt)
+
+ScaleLocalCost = 1/W0**3
 
 #Cost function
 Cost  = (1e-2*T.PowerVar/(0.5*rho*A)/ScaleT)**2                 # Power variation
@@ -139,17 +143,20 @@ Cost += T.Inputs['dbeta']**2                                    # Pitch rate
 Cost += -Cp*T.Wind**3                                           # Power capture
 
 CostTerminal = -Cp*T.Wind**3
+
+Cost         *= ScaleLocalCost
+CostTerminal *= ScaleLocalCost
     
 #Define Electrical Power
 
 T.ElecPower(T.Inputs['Tg']*T.States['Og'])
 
 T.setCost(Cost)
-T.setCost(Cost, Terminal = True)
+T.setCost(CostTerminal, Terminal = True)
 
-T.setTurbine(Nshooting = Nshooting)
+T.setTurbine(Nshooting = Nshooting, Nsimulation = Nsimulation)
 
-F = WindFarm(T, Nturbine = Nturbine, Nshooting = Nshooting, PowerSmoothingWeight = 1.)
+F = WindFarm(T, Nturbine = Nturbine, PowerSmoothingWeight = PowerSmoothingWeight)
 
 # Set bounds
 
@@ -177,80 +184,81 @@ F.lbV['Turbine',:,'Inputs',:,'Tg']    =  Tgmin*ScaleT
 F.ubV['Turbine',:,'Inputs',:,'Tg']    =  Tgmax*ScaleT
 
 #Distribute Initial conditions
+Og0k = [rand.normalvariate(Og0,0.05*Og0) for k in range(Nturbine)]
+#Og0k = [0.95*Og0 + 0.1*k*Og0/float(Nturbine-1) for k in range(Nturbine)]
+beta0 = [max(0.99*BetaOpt,min(0.99*betamax,rand.normalvariate(BetaOpt,0))) for i in range(Nturbine)]
 
-Og0k = [rand.normalvariate(Og0,0.0*Og0) for k in range(Nturbine)]
-
-for i in range(Nturbine):
-    F.lbV['Turbine',i,'States',0,'Og'] = max(Ogmin,min(Ogmax,Og0k[i]))
-    F.ubV['Turbine',i,'States',0,'Og'] = max(Ogmin,min(Ogmax,Og0k[i]))
-    
-    beta0 = max(0.99*BetaOpt,min(0.99*betamax,rand.normalvariate(BetaOpt,0)))
-
-    F.lbV['Turbine',i,'States',0,'beta'] = beta0
-    F.ubV['Turbine',i,'States',0,'beta'] = beta0
-
-    F.EP['Turbine',i,'States0','beta']  = beta0
+for i in range(Nturbine):    
+    F.EP['Turbine',i,'States0','beta']  = beta0[i]
     F.EP['Turbine',i,'States0','Og']    = max(Ogmin,min(Ogmax,Og0k[i]))
     F.EP['Turbine',i,'Inputs0','dbeta'] = 0.
     F.EP['Turbine',i,'Inputs0','Tg']    = Tg0*ScaleT
-    
-#Embbed wind profiles
-for i in range(Nturbine):
-    F.lbV['Turbine', i,'Wind']  = Wact[i]
-    F.ubV['Turbine', i,'Wind']  = Wact[i]
-    F.init['Turbine',i,'Wind']  = Wact[i]
-
 F.EP['PowerVarRef']      = 0.
 
-Primal, Lambdas = F.Solve()
-
-#Initial guess for the adjoints
-Adjoint = []
-for i in range(Nturbine):
-    Adjoint.append(np.array(Lambdas['Turbine'+str(i)]))
+Primal, Adjoints = F.Solve(WProfiles)
 
 #Initial guess for the dual variables
-Dual = np.array(Lambdas['PowerConst']).reshape(Nshooting,1)
-
-#Perturb the solution (wind)
-Per = 5e-2
-for i in range(Nturbine):
-    for k in range(Nshooting+1):
-        Primal['Turbine',i,'Wind',k] += rand.normalvariate(0,Per)
-
-
-#Embbed perturbed wind profiles
-for i in range(Nturbine):
-    F.lbV['Turbine', i,'Wind']  = Primal['Turbine',i,'Wind']
-    F.ubV['Turbine', i,'Wind']  = Primal['Turbine',i,'Wind']
-    F.init  = Primal
-
-#Compute perturbed solution
-Primal_Per, Lambdas_per = F.Solve()
-
-Norm = []
-
-Primal0    = dict(Primal)
-Primal_Per = dict(Primal_Per)
-
-#F.Plot(T, Primal, dt = 0.2)
-
+Dual = np.array(Adjoints['PowerConst']).reshape(Nshooting,1)
 
 ##### NMPC LOOP #####
+#Note: the initial conditions (and inputs) are communicated via F.EP, the wind profiles are sent independently
 
-#for k in range(Nsimulation):
+time = {'States': [dt*k for k in range(Nshooting+1)],
+        'Inputs': [dt*k for k in range(Nshooting)]}
 
-# SQP Step
-Primal, Adjoint, Residual = F.DistributedSQP(Primal, Adjoint, Dual, iter_Dual = 5, iter_SQP = 5)
+timeNMPC = {'States': [dt*k for k in range(Nsimulation+1)],
+            'Inputs': [dt*k for k in range(Nsimulation)]}
+
+DistributedError = []
+
+for k in range(Nsimulation):
+
+                       #Central Solution
+                       PrimalCentral, AdjointsCentral = F.Solve(WProfiles, time = k)
+                       
+                       # SQP Step
+                       PrimalDistributed, AdjointsDistributed, Dual, Residual = F.DistributedSQP(Primal, Adjoints, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1)
+                       
+                       ##Plot
+                       #plt.close()
+                       #F.PlotBasic(T,     PrimalCentral, time, 'k')
+                       #F.PlotBasic(T, PrimalDistributed, time, 'r')
+                       #assert(0==1)
+                       
+                       #Check
+                       errorDist = PrimalCentral.cat - PrimalDistributed.cat
+                       errorDist = np.sqrt(np.dot(errorDist.T,errorDist))
+                       DistributedError.append(float(errorDist))
+                       
+                       #Store
+                       for i in range(Nturbine):
+                           F.StorageDistributed['Turbine',i,...,k] = PrimalDistributed['Turbine',i,...,0]
+                           F.StorageCentral['Turbine',i,...,k]     = PrimalCentral['Turbine',i,...,0]
+                       F.StorageDistributed['PowerVar',k] = float(PrimalDistributed['PowerVar',0])     
+                       F.StorageCentral['PowerVar',k]     = float(PrimalCentral['PowerVar',0])
+                       
+                       #Catch the first input                   
+                       F.EP['Turbine',:,'Inputs0'] = Primal['Turbine',:,'Inputs',0]
+                       
+                       #Actual wind profile at current time
+                       Wact = [WProfiles[i][k] for i in range(Nturbine)]
+                       
+                       #Simulate
+                       F.EP['Turbine',:,'States0'] = F.Simulate(Wact)
+                       
+                       error = veccat(F.EP['Turbine',:,'States0'])-veccat(Primal['Turbine',:,'States',1])
+                       print "Check simulation error = ", np.sqrt(np.dot(error.T,error))
+                       
+                       #Shift
+                       PrimalShifted, AdjointsShifted, DualShifted = F.Shift(Primal, Adjoints, Dual)  
+                       F.init = PrimalShifted
+
                        
 
+plt.figure(1000)
+plt.plot(DistributedError,linestyle = 'none',marker = 'o', color = 'k')
 
-Primal = dict(Primal)
-F.PlotStep(Primal_Per,Primal0,'k')
-F.PlotStep(Primal,Primal0,'r')
-
+F.PlotBasic(T, F.StorageCentral,     timeNMPC, 'k')
+F.PlotBasic(T, F.StorageDistributed, timeNMPC, 'r')
 
 plt.show()
-raw_input()
-plt.close()
-

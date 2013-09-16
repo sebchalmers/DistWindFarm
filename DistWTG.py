@@ -186,8 +186,6 @@ class Turbine:
         if (self._frozen == True):
             print "Wind farm already created, call ignored"
             return
-
-        #CostFunc = self._BuildFunc(Cost, Terminal)
         
         if    (Terminal == False):
             self._StageCost    = self._BuildFunc(Expr, Terminal)
@@ -212,18 +210,24 @@ class Turbine:
     
         return QPsolver
 
-    def setTurbine(self, Nshooting = 50 ):
-        self.Nshooting = Nshooting
-        
+    def _setTurbineVariables(self,Nelements):
         Variables  = struct_msym([
-                                    entry('States',   struct = self.States,   repeat = Nshooting+1),
-                                    entry('Inputs',   struct = self.Inputs,   repeat = Nshooting),
-                                    entry('Wind',     struct = self.Wind,     repeat = Nshooting+1),
-                                    entry('PowerVar', struct = self.PowerVar, repeat = Nshooting)
-                                 ])
-
-        self.V = Variables
+                                    entry('States',   struct = self.States,   repeat = Nelements+1),
+                                    entry('Inputs',   struct = self.Inputs,   repeat = Nelements),
+                                    entry('Wind',     struct = self.Wind,     repeat = Nelements+1),
+                                    entry('PowerVar', struct = self.PowerVar, repeat = Nelements)
+                                ])
+        
+        return Variables
     
+    def setTurbine(self, Nshooting = 50, Nsimulation = 50 ):
+        
+        self.Nshooting   = Nshooting
+        self.Nsimulation = Nsimulation
+        
+        self.V       = self._setTurbineVariables(Nshooting)
+        self.Storage = self._setTurbineVariables(Nsimulation)
+        
         EP         = struct_msym([
                                     entry('States0', struct = self.States),
                                     entry('Inputs0', struct = self.Inputs)
@@ -231,7 +235,7 @@ class Turbine:
         
         self.EP = EP
         
-        
+
         #### Setup Local Cost and Constraints ####
         DynConst = []
         PowerConst = []
@@ -310,15 +314,25 @@ class Turbine:
      
 class WindFarm:
     
-    def __init__(self, Turbine, Nturbine = 0, Nshooting = 50, PowerSmoothingWeight = 0.):     
-        self.Nturbine             = Nturbine
-        self.Nshooting            = Turbine.Nshooting
+    def __init__(self, Turbine, Nturbine = 0, PowerSmoothingWeight = 0.):     
+        
+        
+        self.Nturbine   = Nturbine
+        Nshooting       = Turbine.Nshooting
+        Nsimulation     = Turbine.Nsimulation
+
+        self.Nshooting            = Nshooting
         self.PowerSmoothingWeight = PowerSmoothingWeight
         
+        
+
+        
         #Carry over local stuff
+        self.Nsimulation    = Nsimulation
         self._TurbineSolver = Turbine._Solver
         self._QPsolver      = Turbine._QPsolver
         self._VTurbine      = Turbine.V
+        self._Shoot         = Turbine.Shoot
         
         # Container for the global decision variables
         V          =       struct_msym([
@@ -335,6 +349,15 @@ class WindFarm:
                                         ])
         
         self.EP = EP()
+                                   
+        
+        Storage     = struct_msym([
+                                    entry('Turbine',  struct = Turbine.Storage,   repeat = Nturbine),
+                                    entry('PowerVar', struct = Turbine.PowerVar,  repeat = Nsimulation)
+                                  ])
+        
+        self.StorageCentral     = Storage()
+        self.StorageDistributed = Storage()
         
         #### Centralized Problem ####
 
@@ -351,11 +374,10 @@ class WindFarm:
                 
             TotPowerVar.append(TotPowerVar_k)
             Cost += 0.5*PowerSmoothingWeight*(EP['PowerVarRef',k]-V['PowerVar', k])**2
-        
+            
         Const.append(entry('PowerConst',    expr = TotPowerVar))
-        
-        #Assemble local constraints & costs
-        
+
+        #Assemble local constraints & costs        
         for i in range(Nturbine):
             [Const_i] = Turbine._Const.call([ V['Turbine',i], EP['Turbine',i]])    
             [Cost_i]  = Turbine._Cost.call( [ V['Turbine',i], EP['Turbine',i]])
@@ -374,8 +396,23 @@ class WindFarm:
         self.ubV    = V( inf)
         self.init   = V()
         
+    def Embedding(self,Wact, time):
+
+        #Embbed I.C.    
+        for i in range(self.Nturbine):
+            self.lbV['Turbine',i,'States',0] = self.EP['Turbine',i,'States0']
+            self.ubV['Turbine',i,'States',0] = self.EP['Turbine',i,'States0']
+
+        #Embbed wind profiles
+        for i in range(self.Nturbine):
+            self.lbV['Turbine', i,'Wind']  = Wact[i][time:]
+            self.ubV['Turbine', i,'Wind']  = Wact[i][time:]
+            self.init['Turbine',i,'Wind']  = Wact[i][time:]
   
-    def Solve(self):
+    def Solve(self,Wact, time = 0):
+        
+        self.Embedding(Wact, time)
+        
         self.Solver['solver'].setInput(self.init,                   'x0')
         self.Solver['solver'].setInput(self.Solver['lbg'],         "lbg")
         self.Solver['solver'].setInput(self.Solver['lbg'],         "ubg")
@@ -405,7 +442,7 @@ class WindFarm:
         for i in range(self.Nturbine):
             EP = self.EP['Turbine',i]
             V = Primal['Turbine',i]
-            mu = Adjoint[i]
+            mu = Adjoint['Turbine'+str(i)]
             
             lbX.append(DMatrix(self.lbV['Turbine',i] - V))
             ubX.append(DMatrix(self.ubV['Turbine',i] - V))
@@ -446,7 +483,7 @@ class WindFarm:
         V = self._VTurbine
             
         Xall = []
-        AdjointUpdate = []
+        AdjointUpdate = self.g()
         dPrimalAdjoint = []
         ABextra_all = []
         ABall = []
@@ -610,15 +647,24 @@ class WindFarm:
             
             Xall.append(V(X))
     
-            AdjointUpdate.append(np.array(self._QPsolver.output('lam_a')))
+            AdjointUpdate['Turbine'+str(i)] = np.array(self._QPsolver.output('lam_a'))
         return Xall, AdjointUpdate, DualHess, dPrimalAdjoint, Homotopy, ABextra_all, dPrimalAdjoint, MuBoundall, ABall
 
-    def DistributedSQP(self, Primal, Adjoint,Dual, iter_SQP = 1,iter_Dual = 1, FullDualStep = False):
+    def DistributedSQP(self, Primal, Adjoint,Dual, Wact, time = 0, iter_SQP = 1,iter_Dual = 1, FullDualStep = False):
+        
+        self.Embedding(Wact, time)
+        
+        #LocalResidual = 10
+        #while (LocalResidual > 1e-6):
         for iterate in range(iter_SQP):
             
-            #Construct QPs
+            #Construct local QPs (without dualization)
             QPs = self.PrepareQPs(Primal,Adjoint)
-        
+            
+            LocalResidual = 0
+            for i in range(self.Nturbine):
+                LocalResidual += np.sqrt(np.dot(QPs['g'][i].T,QPs['g'][i]))
+                
             #Dual decomposition iteration
             Norm_Dual = []
             CondHess = [] 
@@ -642,7 +688,7 @@ class WindFarm:
                     
                 #Dual full step
                 StepDual = linalg.solve(DualHess,Residual)
-        
+                                        
                 NormStepDual = np.sqrt(mul(StepDual.T,StepDual))
                 NormResidual = sqrt(mul(Residual.T,Residual))
                 
@@ -667,9 +713,9 @@ class WindFarm:
                 
                 #######################################################
         
-                headerstr = "Iter \t Dual Residual \t Dual step-size \t  Dual full step norm"
+                headerstr = "Iter \t Dual Residual \t Dual step-size \t  Dual full step norm \t Local Residuals"
                 print headerstr
-                print "%3d \t %.5E \t %.5E \t %.5E" %  (iter_dual, NormResidual,  tstep,  NormStepDual)
+                print "%3d \t %.5E \t %.5E \t %.5E \t %.5E" %  (iter_dual, NormResidual,  tstep,  NormStepDual, LocalResidual)
                 
                 print tmax
                 #raw_input()
@@ -678,14 +724,14 @@ class WindFarm:
                             
                 Norm_Dual.append(NormResidual)
         
-            plt.figure(200)
-            plt.semilogy(Norm_Dual[1:])
-            plt.hold('on')
-            plt.grid()
-            plt.title('2 norm of the (dualized) constraint residual')
-            plt.show()
-            raw_input()
-            plt.close()
+            #plt.figure(200)
+            #plt.semilogy(Norm_Dual[1:])
+            #plt.hold('on')
+            #plt.grid()
+            #plt.title('2 norm of the (dualized) constraint residual')
+            #plt.show()
+            ##raw_input()
+            #plt.close()
             
             #Update primal variables
             for index, var in enumerate(Primal['PowerVar']):
@@ -695,8 +741,49 @@ class WindFarm:
                 for key in StepLocal[i].keys():
                     Primal['Turbine',i,key,veccat] += StepLocal[i][key,veccat] 
               
-        return Primal, Adjoint, Residual
+        return Primal, Adjoint, Dual, Residual
+    
+    ############ Simulation ########
+    def Simulate(self,W):
 
+        StatesPlus = []
+        for i in range(self.Nturbine):
+            
+            self._Shoot.setInput(self.EP['Turbine',i,'States0'],0)
+            self._Shoot.setInput(self.EP['Turbine',i,'Inputs0'],1)
+            self._Shoot.setInput(W[i],2)
+            self._Shoot.evaluate()
+            Xplus = np.array(self._Shoot.output())
+            
+            #self.EP['Turbine',i,'States0'] = Xplus
+            StatesPlus.append(Xplus)
+            
+        return StatesPlus
+
+    ############ Shifting ##########
+    def Shift(self, Primal, Adjoint, Dual):
+                
+        PrimalShifted = self.V()
+        for i in range(self.Nturbine):
+            PrimalShifted['Turbine',i,...,:-1] = Primal['Turbine',i,...,1:]
+            PrimalShifted['Turbine',i,..., -1] = Primal['Turbine',i,...,-1]
+        
+        PrimalShifted['PowerVar',:-1] = Primal['PowerVar',1:]
+        PrimalShifted['PowerVar',-1] = Primal['PowerVar',-1]
+        
+        AdjointShifted = self.g()
+        for key in Adjoint.keys():
+            AdjointShifted[key,:-1] = Adjoint[key,1:]
+            AdjointShifted[key, -1] = Adjoint[key,-1]
+
+        
+        DualShifted = np.zeros(Dual.shape)  
+        DualShifted[:-1,:] = Dual[1:,:]
+        DualShifted[ -1,:] = Dual[-1,:]
+        
+        return PrimalShifted, AdjointShifted, DualShifted
+
+         
     ############ Plotting ##########
     def PlotStep(self, Primal,Primal0,col,dt = 0.2):
         
@@ -727,6 +814,31 @@ class WindFarm:
                 plt.title('Step'+key)   
                 counter += 1
     
+    def PlotBasic(self, T, Primal, time, col):
+        for fig, key in enumerate(T.States.keys()):
+            for i in range(self.Nturbine):
+                plt.figure(fig)
+                plt.subplot(self.Nturbine,1,i)
+                plt.hold('on')
+                plt.plot(time['Inputs'],    Primal['Turbine',i,'States',:-1,key],color=col)
+            plt.title('State '+key)
+            
+        for fig, key in enumerate(T.Inputs.keys()):
+            for i in range(self.Nturbine):
+                plt.figure(100+fig)
+                plt.subplot(self.Nturbine,1,i)
+                plt.hold('on')
+                plt.step(time['Inputs'],    Primal['Turbine',i,'Inputs',:,key],color=col)
+            plt.title('Input '+key)
+    
+        plt.figure(200)
+
+        for i in range(self.Nturbine):
+            plt.hold('on')
+            plt.plot(time['Inputs'],Primal['Turbine',i,'PowerVar'],color=col,linestyle = ':')
+
+        plt.plot(time['Inputs'],    Primal['PowerVar'],color=col,linewidth = 2)
+
     def Plot(self, Turbine, Primal0, dt = 0.2):
         
         Nturbine = self.Nturbine
