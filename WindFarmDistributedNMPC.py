@@ -23,7 +23,7 @@ from DistWTG import *
 
 Nturbine = 4
 Nshooting = 50
-Nsimulation = 100
+Nsimulation = 250
 
 ScaleT = 1e-4
 
@@ -56,7 +56,7 @@ PowerSmoothingWeight = 1e-2
 
 W3 = R*Ogmax/lambdaOpt/N
 
-W0 = 8.
+W0 = 9.
 
 dt = 0.2
 
@@ -95,9 +95,9 @@ for k in range(Nturbine):
     #a,_ = GenWind(lambda_, kwind, TauWind,Nshooting)
     Wk = [W0]
     for k in range(Nsimulation+Nshooting):
-        Wk.append(Wk[-1] + rand.normalvariate(0,5e-2) + 5e-2*(8. - Wk[-1]))    
+        Wk.append(Wk[-1] + rand.normalvariate(7e-3,5e-2) + 0*(8. - Wk[-1]))    
     WProfiles.append(Wk)
-    plt.plot(Wk)
+    plt.plot([k*dt for k in range(Nsimulation+Nshooting+1)],Wk)
 
 plt.show()
 raw_input()

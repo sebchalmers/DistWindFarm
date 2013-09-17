@@ -432,20 +432,13 @@ class WindFarm:
     
     def PrepareQPs(self, Primal,Adjoint):
             
-        H = []
-        f = []
-        g = []
-        dg = []
-        lbX = []
-        ubX = []
+        QPs = []
+        
         solver = self._TurbineSolver
         for i in range(self.Nturbine):
             EP = self.EP['Turbine',i]
             V = Primal['Turbine',i]
             mu = Adjoint['Turbine'+str(i)]
-            
-            lbX.append(DMatrix(self.lbV['Turbine',i] - V))
-            ubX.append(DMatrix(self.ubV['Turbine',i] - V))
             
             solver['H'].setInput(V, 0)
             solver['H'].setInput(1.,1)
@@ -464,15 +457,15 @@ class WindFarm:
             solver['g'].setInput(V, 0)
             solver['g'].setInput(EP,1)
             solver['g'].evaluate()
-            
-            
-            H.append(DMatrix(solver[ 'H'].output()))
-            f.append(DMatrix(solver[ 'f'].output()))
-            
-            dg.append(DMatrix(solver['dg'].output()))
-            g.append(DMatrix(solver[ 'g'].output()))
         
-        QPs = {'H':H, 'f':f, 'dg':dg, 'g':g, 'lbX':lbX, 'ubX':ubX}
+            QPs.append({
+                        'H'  : DMatrix(solver[ 'H'].output()),
+                        'f'  : DMatrix(solver[ 'f'].output()),
+                        'dg' : DMatrix(solver['dg'].output()),
+                        'g'  : DMatrix(solver[ 'g'].output()),
+                        'lbX': DMatrix(self.lbV['Turbine',i] - V),
+                        'ubX': DMatrix(self.ubV['Turbine',i] - V)
+                        })
         return QPs
     
     
@@ -494,12 +487,12 @@ class WindFarm:
         
         DualHess = -np.eye(self.Nshooting)/self.PowerSmoothingWeight
         for i in range(self.Nturbine):
-            Hi = DMatrix(QPs['H'][i])
-            fi = DMatrix(QPs['f'][i])
-            dgi = DMatrix(QPs['dg'][i])
-            gi = DMatrix(QPs['g'][i])
-            lbXi = DMatrix(QPs['lbX'][i])
-            ubXi = DMatrix(QPs['ubX'][i])
+            Hi = DMatrix(QPs[i]['H'])
+            fi = DMatrix(QPs[i]['f'])
+            dgi = DMatrix(QPs[i]['dg'])
+            gi = DMatrix(QPs[i]['g'])
+            lbXi = DMatrix(QPs[i]['lbX'])
+            ubXi = DMatrix(QPs[i]['ubX'])
             
             #Index of the power variations
             IndexDual = list(V.i['PowerVar',veccat])
@@ -604,10 +597,10 @@ class WindFarm:
             block = np.zeros([len(AB),X.shape[0]])
             for line, col in enumerate(AB):
                 block[line,col] = 1.
-            gActive = np.concatenate([block,QPs['dg'][i]],axis = 0)
+            gActive = np.concatenate([block,QPs[i]['dg']],axis = 0)
             
             # KKT Matrix
-            KKTMat = np.concatenate([QPs['H'][i],gActive],axis = 0)
+            KKTMat = np.concatenate([QPs[i]['H'],gActive],axis = 0)
             Nconst = gActive.shape[0]
             Addon = np.concatenate([gActive.T,np.zeros([Nconst,Nconst])])
             KKT = np.concatenate([KKTMat,Addon],axis = 1)
@@ -669,7 +662,7 @@ class WindFarm:
             
             LocalResidual = 0
             for i in range(self.Nturbine):
-                LocalResidual += np.sqrt(np.dot(QPs['g'][i].T,QPs['g'][i]))
+                LocalResidual += np.sqrt(np.dot(QPs[i]['g'].T,QPs[i]['g']))
                 
             #Dual decomposition iteration
             Norm_Dual = []
