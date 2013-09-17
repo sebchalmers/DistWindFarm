@@ -483,11 +483,13 @@ class WindFarm:
         V = self._VTurbine
             
         Xall = []
-        AdjointUpdate = self.g()
-        dPrimalAdjoint = []
-        ABextra_all = []
-        ABall = []
-        MuBoundall = []
+        AdjointUpdate  = self.g()
+        MuBoundall     = []
+        ABextra_all    = []
+        dPrimal        = []
+        dAdjoint       = []
+        dMuBound       = []
+        
         Homotopy = {'Primal':{'Matrices': [], 'RHS':[]}, 'Dual':{'Matrices': [], 'RHS':[]}}
         
         DualHess = -np.eye(self.Nshooting)/self.PowerSmoothingWeight
@@ -540,7 +542,7 @@ class WindFarm:
                 else:
                     IAB.append(ivar)
 
-            ABall.append(AB)
+            #ABall.append(AB)
             
             #Variable to monitor collpased bounds
             BoundsGap = np.abs(np.array(ubXi) - np.array(lbXi))
@@ -616,8 +618,11 @@ class WindFarm:
                 b[line,col] = 1.
             
             #dPrimalAdjoint = KKT\b
-            dPrimalAdjoint.append(linalg.solve(KKT,b))
-                        
+            try:
+                dPrimalAdjoint = linalg.solve(KKT,b)
+            except: #In case of a badly identified Active Set
+                dPrimalAdjoint, _, _, _ = linalg.lstsq(KKT,b)
+                
             #The "dPrimalAdjoint" provides:
             #[d X       ]
             #[d MuBound ] = dPrimalAdjoint * d Dual
@@ -634,23 +639,24 @@ class WindFarm:
             #   Homotopy[  'Dual']['Matrices']*DualStep <= Homotopy[  'Dual']['RHS']
             #
             
-            dPrimal  = dPrimalAdjoint[-1][:X.shape[0],:]
-            dMuBound = dPrimalAdjoint[-1][X.shape[0]:X.shape[0]+len(AB),:]
+            dPrimal.append(dPrimalAdjoint[:X.shape[0],:])
+            dMuBound.append(dPrimalAdjoint[X.shape[0]:X.shape[0]+len(AB),:])
+            dAdjoint.append(dPrimalAdjoint[X.shape[0]+len(AB):,:])
             
-            Homotopy['Primal']['Matrices'].append(np.dot(HomotopyPrimalMAT,dPrimal))
+            Homotopy['Primal']['Matrices'].append(np.dot(HomotopyPrimalMAT,dPrimal[-1]))
             Homotopy['Primal'][     'RHS'].append(HomotopyPrimalRHS)
             
-            Homotopy[  'Dual']['Matrices'].append(np.dot(HomotopyDualMAT,dMuBound))
+            Homotopy[  'Dual']['Matrices'].append(np.dot(HomotopyDualMAT,dMuBound[-1]))
             Homotopy[  'Dual'][     'RHS'].append(HomotopyDualRHS)
             
-            DualHess -= dPrimalAdjoint[-1][IndexDual]
+            DualHess -= dPrimalAdjoint[IndexDual]
             
             Xall.append(V(X))
     
             AdjointUpdate['Turbine'+str(i)] = np.array(self._QPsolver.output('lam_a'))
-        return Xall, AdjointUpdate, DualHess, dPrimalAdjoint, Homotopy, ABextra_all, dPrimalAdjoint, MuBoundall, ABall
+        return Xall, AdjointUpdate, DualHess, dPrimal, dAdjoint, Homotopy
 
-    def DistributedSQP(self, Primal, Adjoint,Dual, Wact, time = 0, iter_SQP = 1,iter_Dual = 1, FullDualStep = False):
+    def DistributedSQP(self, Primal, Adjoint,Dual, Wact, time = 0, iter_SQP = 1,iter_Dual = 1, FullDualStep = True, ReUpdate = False):
         
         self.Embedding(Wact, time)
         
@@ -672,7 +678,7 @@ class WindFarm:
             
                 
                 #Local Primal/Adjoint Step
-                StepLocal, Adjoint, DualHess, dPrimal, Homotopy, ABextra, dPrimalAdjointMAT, MuBound, AB = self.QPStep(QPs, Dual)
+                StepLocal, Adjoint, DualHess, dPrimal, dAdjoint, Homotopy = self.QPStep(QPs, Dual)
                      
                 #Check Dual Hessian conditioning
                 #u, s, vh = linalg.svd(DualHess)
@@ -717,11 +723,17 @@ class WindFarm:
                 print headerstr
                 print "%3d \t %.5E \t %.5E \t %.5E \t %.5E" %  (iter_dual, NormResidual,  tstep,  NormStepDual, LocalResidual)
                 
-                print tmax
-                #raw_input()
-        
                 Dual -= tstep*StepDual
-                            
+                          
+                ################### SECOND UPDATE ####################
+                    
+                if (ReUpdate == True):
+                    for i in range(self.Nturbine):
+                        StepLocal[i] = self._VTurbine(StepLocal[i].cat + np.dot(dPrimal[i],-tstep*StepDual))
+                        Adjoint['Turbine'+str(i)] += np.dot(dAdjoint[i],-tstep*StepDual)
+                        
+                #######################################################
+                
                 Norm_Dual.append(NormResidual)
         
             #plt.figure(200)

@@ -23,7 +23,7 @@ from DistWTG import *
 
 Nturbine = 4
 Nshooting = 50
-Nsimulation = 50
+Nsimulation = 100
 
 ScaleT = 1e-4
 
@@ -52,7 +52,7 @@ betamin = -3
 dbetamax = 7
 Powmax = 5
 
-PowerSmoothingWeight = 1.
+PowerSmoothingWeight = 1e-2
 
 W3 = R*Ogmax/lambdaOpt/N
 
@@ -95,7 +95,7 @@ for k in range(Nturbine):
     #a,_ = GenWind(lambda_, kwind, TauWind,Nshooting)
     Wk = [W0]
     for k in range(Nsimulation+Nshooting):
-        Wk.append(Wk[-1] + rand.normalvariate(0,2e-1) + 1e-1*(8. - Wk[-1]))    
+        Wk.append(Wk[-1] + rand.normalvariate(0,5e-2) + 5e-2*(8. - Wk[-1]))    
     WProfiles.append(Wk)
     plt.plot(Wk)
 
@@ -138,7 +138,7 @@ T.setDynamics(RHS, dt = dt)
 ScaleLocalCost = 1/W0**3
 
 #Cost function
-Cost  = (1e-2*T.PowerVar/(0.5*rho*A)/ScaleT)**2                 # Power variation
+Cost  = (T.Inputs['Tg'] - T.InputsPrev['Tg'])**2#(1e-2*T.PowerVar/(0.5*rho*A)/ScaleT)**2                 # Power variation
 Cost += T.Inputs['dbeta']**2                                    # Pitch rate
 Cost += -Cp*T.Wind**3                                           # Power capture
 
@@ -217,12 +217,14 @@ for k in range(Nsimulation):
                        PrimalCentral, AdjointsCentral = F.Solve(WProfiles, time = k)
                        
                        # SQP Step
-                       PrimalDistributed, AdjointsDistributed, Dual, Residual = F.DistributedSQP(Primal, Adjoints, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1)
+                       PrimalDistributed, AdjointsDistributed, Dual, Residual = F.DistributedSQP(Primal, Adjoints, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1, FullDualStep = False, ReUpdate = True)
                        
                        ##Plot
-                       #plt.close()
+                       #
                        #F.PlotBasic(T,     PrimalCentral, time, 'k')
                        #F.PlotBasic(T, PrimalDistributed, time, 'r')
+                       #raw_input()
+                       #plt.close('all')
                        #assert(0==1)
                        
                        #Check
@@ -238,7 +240,7 @@ for k in range(Nsimulation):
                        F.StorageCentral['PowerVar',k]     = float(PrimalCentral['PowerVar',0])
                        
                        #Catch the first input                   
-                       F.EP['Turbine',:,'Inputs0'] = Primal['Turbine',:,'Inputs',0]
+                       F.EP['Turbine',:,'Inputs0'] = PrimalCentral['Turbine',:,'Inputs',0]
                        
                        #Actual wind profile at current time
                        Wact = [WProfiles[i][k] for i in range(Nturbine)]
