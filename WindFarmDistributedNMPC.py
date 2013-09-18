@@ -235,19 +235,20 @@ DistributedError = []
 PrimalDistributed   = F.V(Primal.cat)
 AdjointsDistributed = F.g(Adjoints.cat)
 
-ResidualLog = []
-StepSizeLog = []
+ResidualLog  = []
+StepSizeLog  = []
+StatusLog    = []
 for k in range(Nsimulation):
 
                        #Central Solution
-                       PrimalCentral, AdjointsCentral = F.Solve(WProfiles, time = k)
-                       F.init = PrimalCentral
+                       #PrimalCentral, AdjointsCentral = F.Solve(WProfiles, time = k)
+                       #F.init = PrimalCentral
                        
                        # SQP Step
-                       PrimalDistributed, AdjointsDistributed, Dual, Residual, StepSize = F.DistributedSQP(PrimalDistributed, AdjointsDistributed, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1, FullDualStep = False, ReUpdate = True)
+                       PrimalDistributed, AdjointsDistributed, Dual, Residual, StepSize, Status = F.DistributedSQP(PrimalDistributed, AdjointsDistributed, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1, FullDualStep = False, ReUpdate = True)
                        ResidualLog.append(float(np.sqrt(np.dot(Residual.T,Residual))))
                        StepSizeLog.append(StepSize)
-
+                       StatusLog.append(Status)
                        
                        ##Plot
                        #plt.close('all')
@@ -267,12 +268,11 @@ for k in range(Nsimulation):
                        #Store
                        for i in range(Nturbine):
                            F.StorageDistributed['Turbine',i,...,k] = PrimalDistributed['Turbine',i,...,0]
-                           F.StorageCentral['Turbine',i,...,k]     = PrimalCentral['Turbine',i,...,0]
+                           #F.StorageCentral['Turbine',i,...,k]     = PrimalCentral['Turbine',i,...,0]
                        F.StorageDistributed['PowerVar',k] = float(PrimalDistributed['PowerVar',0])     
-                       F.StorageCentral['PowerVar',k]     = float(PrimalCentral['PowerVar',0])
+                       #F.StorageCentral['PowerVar',k]     = float(PrimalCentral['PowerVar',0])
                        
                        #Catch the first input                   
-                       #F.EP['Turbine',:,'Inputs0'] = PrimalCentral['Turbine',:,'Inputs',0]
                        F.EP['Turbine',:,'Inputs0'] = PrimalDistributed['Turbine',:,'Inputs',0]
                        
                        
@@ -282,7 +282,7 @@ for k in range(Nsimulation):
                        #Simulate
                        F.EP['Turbine',:,'States0'] = F.Simulate(Wact)
                        
-                       error = veccat(F.EP['Turbine',:,'States0'])-veccat(Primal['Turbine',:,'States',1])
+                       error = veccat(F.EP['Turbine',:,'States0'])-veccat(PrimalDistributed['Turbine',:,'States',1])
                        print "Check simulation error = ", np.sqrt(np.dot(error.T,error))
                        
                        #Shift: Dual shifting fucks up, I dunno why !!!
@@ -299,7 +299,7 @@ plt.subplot(2,1,2)
 plt.plot(timeNMPC['Inputs'], StepSizeLog,linestyle = 'none',marker = 'o', color = 'k')
 plt.title('Dual Step Size')
 
-F.PlotBasic(T, F.StorageCentral,     timeNMPC, 'k')
+#F.PlotBasic(T, F.StorageCentral,     timeNMPC, 'k')
 F.PlotBasic(T, F.StorageDistributed, timeNMPC, 'r')
 
 plt.show()
