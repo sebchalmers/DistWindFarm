@@ -744,7 +744,10 @@ class WindFarm:
             
             for i in range(self.Nturbine):
                 for key in StepLocal[i].keys():
-                    Primal['Turbine',i,key,veccat] += StepLocal[i][key,veccat] 
+                    Primal['Turbine',i,key,veccat] += StepLocal[i][key,veccat]
+                    
+                    #Project in the bounds 
+                    Primal['Turbine',i,key,veccat] = min(max(Primal['Turbine',i,key,veccat],self.lbV['Turbine',i,key,veccat]),self.ubV['Turbine',i,key,veccat])
               
         return Primal, Adjoint, Dual, Residual
     
@@ -774,7 +777,7 @@ class WindFarm:
             PrimalShifted['Turbine',i,..., -1] = Primal['Turbine',i,...,-1]
         
         PrimalShifted['PowerVar',:-1] = Primal['PowerVar',1:]
-        PrimalShifted['PowerVar',-1] = Primal['PowerVar',-1]
+        PrimalShifted['PowerVar',-1]  = Primal['PowerVar',-1]
         
         AdjointShifted = self.g()
         for key in Adjoint.keys():
@@ -838,11 +841,13 @@ class WindFarm:
     
         plt.figure(200)
 
+        PowerVar = 0
         for i in range(self.Nturbine):
+            PowerVar += np.array(Primal['Turbine',i,'PowerVar'])
             plt.hold('on')
             plt.plot(time['Inputs'],Primal['Turbine',i,'PowerVar'],color=col,linestyle = ':')
 
-        plt.plot(time['Inputs'],    Primal['PowerVar'],color=col,linewidth = 2)
+        plt.plot(time['Inputs'],    PowerVar,color=col,linewidth = 2)
 
     def Plot(self, Turbine, Primal0, dt = 0.2):
         

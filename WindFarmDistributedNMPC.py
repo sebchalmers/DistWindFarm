@@ -14,7 +14,7 @@ import random as rand
 import numpy as np
 from matplotlib import interactive
 interactive(True)
-
+import scipy.io
 
 import DistWTG
 reload(DistWTG)
@@ -56,7 +56,7 @@ PowerSmoothingWeight = 1e-2
 
 W3 = R*Ogmax/lambdaOpt/N
 
-W0 = 9.
+W0 = 8.
 
 dt = 0.2
 
@@ -95,8 +95,28 @@ for k in range(Nturbine):
     #a,_ = GenWind(lambda_, kwind, TauWind,Nshooting)
     Wk = [W0]
     for k in range(Nsimulation+Nshooting):
-        Wk.append(Wk[-1] + rand.normalvariate(7e-3,5e-2) + 0*(8. - Wk[-1]))    
+        Wk.append(Wk[-1] + rand.normalvariate(5e-3,5e-2) + 0*(8. - Wk[-1]))    
     WProfiles.append(Wk)
+    plt.plot([k*dt for k in range(Nsimulation+Nshooting+1)],Wk)
+
+plt.show()
+raw_input()
+plt.close()
+#
+#Dic = {}
+#for i in range(Nturbine):
+#    Dic['Wind'+str(i)] = WProfiles[i]
+#scipy.io.savemat('WindData2', Dic)
+
+Dic = scipy.io.loadmat('WindData2')
+
+plt.figure()
+plt.hold('on')
+WProfiles = []
+for i in range(Nturbine):
+    Wk = Dic['Wind'+str(i)].ravel()
+    WProfiles.append(list(Wk))
+    
     plt.plot([k*dt for k in range(Nsimulation+Nshooting+1)],Wk)
 
 plt.show()
@@ -184,7 +204,7 @@ F.lbV['Turbine',:,'Inputs',:,'Tg']    =  Tgmin*ScaleT
 F.ubV['Turbine',:,'Inputs',:,'Tg']    =  Tgmax*ScaleT
 
 #Distribute Initial conditions
-Og0k = [rand.normalvariate(Og0,0.05*Og0) for k in range(Nturbine)]
+Og0k = [rand.normalvariate(Og0,0.0*Og0) for k in range(Nturbine)]
 #Og0k = [0.95*Og0 + 0.1*k*Og0/float(Nturbine-1) for k in range(Nturbine)]
 beta0 = [max(0.99*BetaOpt,min(0.99*betamax,rand.normalvariate(BetaOpt,0))) for i in range(Nturbine)]
 
@@ -211,26 +231,35 @@ timeNMPC = {'States': [dt*k for k in range(Nsimulation+1)],
 
 DistributedError = []
 
+#Create independent copies for the distributed problem
+PrimalDistributed   = F.V(Primal.cat)
+AdjointsDistributed = F.g(Adjoints.cat)
+
+ResidualLog = []
 for k in range(Nsimulation):
 
                        #Central Solution
                        PrimalCentral, AdjointsCentral = F.Solve(WProfiles, time = k)
+                       F.init = PrimalCentral
                        
                        # SQP Step
-                       PrimalDistributed, AdjointsDistributed, Dual, Residual = F.DistributedSQP(Primal, Adjoints, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1, FullDualStep = False, ReUpdate = True)
+                       PrimalDistributed, AdjointsDistributed, Dual, Residual = F.DistributedSQP(PrimalDistributed, AdjointsDistributed, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1, FullDualStep = False, ReUpdate = True)
+                       ResidualLog.append(np.sqrt(np.dot(Residual.T,Residual)))
                        
                        ##Plot
-                       #
-                       #F.PlotBasic(T,     PrimalCentral, time, 'k')
-                       #F.PlotBasic(T, PrimalDistributed, time, 'r')
-                       #raw_input()
                        #plt.close('all')
+                       #F.PlotBasic(T, PrimalCentral,     time, 'k')
+                       #F.PlotBasic(T, PrimalDistributed, time, 'r')
+                       #
+                       #
+                       #raw_input()
+                       
                        #assert(0==1)
                        
                        #Check
-                       errorDist = PrimalCentral.cat - PrimalDistributed.cat
-                       errorDist = np.sqrt(np.dot(errorDist.T,errorDist))
-                       DistributedError.append(float(errorDist))
+                       #errorDist = PrimalCentral.cat - PrimalDistributed.cat
+                       #errorDist = np.sqrt(np.dot(errorDist.T,errorDist))
+                       #DistributedError.append(float(errorDist))
                        
                        #Store
                        for i in range(Nturbine):
@@ -252,13 +281,15 @@ for k in range(Nsimulation):
                        print "Check simulation error = ", np.sqrt(np.dot(error.T,error))
                        
                        #Shift
-                       PrimalShifted, AdjointsShifted, DualShifted = F.Shift(Primal, Adjoints, Dual)  
-                       F.init = PrimalShifted
-
+                       #PrimalDistributed, AdjointsDistributed, Dual = F.Shift(PrimalCentral, AdjointsCentral, Dual)  
+                       #F.init = Primal
+                       #
+                       #F.PlotBasic(T, PrimalDistributed,            time, 'b')
+                       #raw_input()
                        
-
 plt.figure(1000)
-plt.plot(DistributedError,linestyle = 'none',marker = 'o', color = 'k')
+plt.plot(ResidualLog,linestyle = 'none',marker = 'o', color = 'k')
+plt.title('Dual Residual')
 
 F.PlotBasic(T, F.StorageCentral,     timeNMPC, 'k')
 F.PlotBasic(T, F.StorageDistributed, timeNMPC, 'r')
