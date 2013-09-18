@@ -285,7 +285,7 @@ class Turbine:
                                                     self.V['Wind',k],
                                                     self.V['States',k-1]
                                                 ])
-        Cost += StageCost
+        Cost += TerminalCost
                              
          
         g =      struct_MX([
@@ -748,8 +748,16 @@ class WindFarm:
                     
                     #Project in the bounds 
                     Primal['Turbine',i,key,veccat] = min(max(Primal['Turbine',i,key,veccat],self.lbV['Turbine',i,key,veccat]),self.ubV['Turbine',i,key,veccat])
-              
-        return Primal, Adjoint, Dual, Residual
+            
+            #Pass on Dual variables (not needed, but for consistency)
+            Adjoint['PowerConst',veccat] = Dual
+            
+            #Update the residual (needed if second update is used)
+            ResidualOut = Primal['PowerVar',veccat]
+            for i in range(self.Nturbine):
+                ResidualOut -= Primal['Turbine',i,'PowerVar',veccat]
+            
+        return Primal, Adjoint, Dual, ResidualOut, tstep
     
     ############ Simulation ########
     def Simulate(self,W):

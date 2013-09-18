@@ -88,27 +88,27 @@ lambda_       = 9.
 kwind         = 3.
 TauWind       = 600.
 
-plt.figure()
-plt.hold('on')
-WProfiles = []
-for k in range(Nturbine):
-    #a,_ = GenWind(lambda_, kwind, TauWind,Nshooting)
-    Wk = [W0]
-    for k in range(Nsimulation+Nshooting):
-        Wk.append(Wk[-1] + rand.normalvariate(5e-3,5e-2) + 0*(8. - Wk[-1]))    
-    WProfiles.append(Wk)
-    plt.plot([k*dt for k in range(Nsimulation+Nshooting+1)],Wk)
-
-plt.show()
-raw_input()
-plt.close()
+#plt.figure()
+#plt.hold('on')
+#WProfiles = []
+#for k in range(Nturbine):
+#    #a,_ = GenWind(lambda_, kwind, TauWind,Nshooting)
+#    Wk = [W0]
+#    for k in range(Nsimulation+Nshooting):
+#        Wk.append(Wk[-1] + rand.normalvariate(5e-3,5e-2) + 0*(8. - Wk[-1]))    
+#    WProfiles.append(Wk)
+#    plt.plot([k*dt for k in range(Nsimulation+Nshooting+1)],Wk)
+#
+#plt.show()
+#raw_input()
+#plt.close()
 #
 #Dic = {}
 #for i in range(Nturbine):
 #    Dic['Wind'+str(i)] = WProfiles[i]
 #scipy.io.savemat('WindData2', Dic)
 
-Dic = scipy.io.loadmat('WindData2')
+Dic = scipy.io.loadmat('WindData')
 
 plt.figure()
 plt.hold('on')
@@ -236,6 +236,7 @@ PrimalDistributed   = F.V(Primal.cat)
 AdjointsDistributed = F.g(Adjoints.cat)
 
 ResidualLog = []
+StepSizeLog = []
 for k in range(Nsimulation):
 
                        #Central Solution
@@ -243,8 +244,10 @@ for k in range(Nsimulation):
                        F.init = PrimalCentral
                        
                        # SQP Step
-                       PrimalDistributed, AdjointsDistributed, Dual, Residual = F.DistributedSQP(PrimalDistributed, AdjointsDistributed, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1, FullDualStep = False, ReUpdate = True)
-                       ResidualLog.append(np.sqrt(np.dot(Residual.T,Residual)))
+                       PrimalDistributed, AdjointsDistributed, Dual, Residual, StepSize = F.DistributedSQP(PrimalDistributed, AdjointsDistributed, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1, FullDualStep = False, ReUpdate = True)
+                       ResidualLog.append(float(np.sqrt(np.dot(Residual.T,Residual))))
+                       StepSizeLog.append(StepSize)
+
                        
                        ##Plot
                        #plt.close('all')
@@ -269,7 +272,9 @@ for k in range(Nsimulation):
                        F.StorageCentral['PowerVar',k]     = float(PrimalCentral['PowerVar',0])
                        
                        #Catch the first input                   
-                       F.EP['Turbine',:,'Inputs0'] = PrimalCentral['Turbine',:,'Inputs',0]
+                       #F.EP['Turbine',:,'Inputs0'] = PrimalCentral['Turbine',:,'Inputs',0]
+                       F.EP['Turbine',:,'Inputs0'] = PrimalDistributed['Turbine',:,'Inputs',0]
+                       
                        
                        #Actual wind profile at current time
                        Wact = [WProfiles[i][k] for i in range(Nturbine)]
@@ -280,16 +285,19 @@ for k in range(Nsimulation):
                        error = veccat(F.EP['Turbine',:,'States0'])-veccat(Primal['Turbine',:,'States',1])
                        print "Check simulation error = ", np.sqrt(np.dot(error.T,error))
                        
-                       #Shift
-                       #PrimalDistributed, AdjointsDistributed, Dual = F.Shift(PrimalCentral, AdjointsCentral, Dual)  
-                       #F.init = Primal
-                       #
-                       #F.PlotBasic(T, PrimalDistributed,            time, 'b')
+                       #Shift: Dual shifting fucks up, I dunno why !!!
+                       #PrimalDistributed, AdjointsDistributed, Dual = F.Shift(PrimalDistributed, AdjointsDistributed, Dual)  
+                       PrimalDistributed, AdjointsDistributed, _ = F.Shift(PrimalDistributed, AdjointsDistributed, Dual)  
+
                        #raw_input()
                        
 plt.figure(1000)
-plt.plot(ResidualLog,linestyle = 'none',marker = 'o', color = 'k')
+plt.subplot(2,1,1)
+plt.plot(timeNMPC['Inputs'], ResidualLog,linestyle = 'none',marker = 'o', color = 'k')
 plt.title('Dual Residual')
+plt.subplot(2,1,2)
+plt.plot(timeNMPC['Inputs'], StepSizeLog,linestyle = 'none',marker = 'o', color = 'k')
+plt.title('Dual Step Size')
 
 F.PlotBasic(T, F.StorageCentral,     timeNMPC, 'k')
 F.PlotBasic(T, F.StorageDistributed, timeNMPC, 'r')
