@@ -253,12 +253,15 @@ for k in range(Nsimulation):
                        ##Plot
                        #plt.close('all')
                        #F.PlotBasic(T, PrimalCentral,     time, 'k')
-                       #F.PlotBasic(T, PrimalDistributed, time, 'r')
+                       
+                       #if (ResidualLog[-1] > 10):
+                       #                       F.PlotBasic(T, PrimalDistributed, time, 'r')
+                       #                       assert(0==1)
                        #
                        #
                        #raw_input()
                        
-                       #assert(0==1)
+                       #
                        
                        #Check
                        #errorDist = PrimalCentral.cat - PrimalDistributed.cat
