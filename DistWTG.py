@@ -21,6 +21,12 @@ Required version of CasADi: v1.7.x
 
 OBS: the code assumes only simple bounds !! Can be extended by modifying method "QPStep"...
 
+TODO:
+
+ - survive if no slacks are declared
+ - code clean up and shortening
+ - Introduce a centralized QP solver for comparison
+ 
 """
 
 from casadi import *
@@ -44,6 +50,8 @@ def _setSolver(self, V,Cost,g,P):
 
     lbg = g()
     ubg = g()
+    if ('IneqConst' in g.keys()):
+        lbg['IneqConst'] = -inf
     
     nl = MXFunction(nlpIn(x=V,p=P),nlpOut(f=Cost,g=g))
     nl.init()
@@ -75,10 +83,11 @@ def _setSolver(self, V,Cost,g,P):
     return Solver
 
 class Turbine:
-    def __init__(self, Inputs = [], States = []):        
+    def __init__(self, Inputs = [], States = [], Slacks = []):        
 
         self._frozen = False
-            
+        
+        #Inputs declared by the user
         InputList = []
         for key in assertList(Inputs):
             InputList.append(entry(key))
@@ -86,14 +95,20 @@ class Turbine:
         # States declared by the user
         StateList = []
         for key in assertList(States):
-            StateList.append(entry(key)) 
-    
+            StateList.append(entry(key))
+            
+        # Slacks declared by the user (for constraints relaxation)
+        SlackList = []
+        for key in assertList(Slacks):
+            SlackList.append(entry(key)) 
+        
         P = ssym('P')
         W = ssym('W')
 
         # lists of names (strings)
         self.States            = struct_ssym(StateList)
         self.Inputs            = struct_ssym(InputList)
+        self.Slacks            = struct_ssym(SlackList)
         self.StatesPrev        = struct_ssym(StateList)
         self.InputsPrev        = struct_ssym(InputList)
         self.Wind              = W
@@ -150,15 +165,20 @@ class Turbine:
 
         X           = self.States
         U           = self.Inputs
+        Slacks      = self.Slacks
         Uprev       = self.InputsPrev
         Xprev       = self.StatesPrev
         PowerVar    = self.PowerVar
         W           = self.Wind  
             
+        #CAREFUL, THE INPUT SCHEME MUST MATCH THE FUNCTION CALLS !!
         if Terminal == False:
-            listFuncInput = [U, X, W, Uprev, Xprev, PowerVar]            
+            listFuncInput = [U, X, W, PowerVar, Uprev, Xprev]            
         else:
             listFuncInput = [X, W, Xprev]
+        
+        if not(isEmpty(Slacks)):    
+            listFuncInput.append(Slacks)
             
         Func = SXFunction(listFuncInput,[Expr])
         Func.init()
@@ -192,8 +212,6 @@ class Turbine:
         elif  (Terminal == True): 
             self._TerminalCost = self._BuildFunc(Expr, Terminal)
             
-            
-
 
     def _CreateQP(self, solver,V):
         
@@ -211,12 +229,18 @@ class Turbine:
         return QPsolver
 
     def _setTurbineVariables(self,Nelements):
-        Variables  = struct_msym([
-                                    entry('States',   struct = self.States,   repeat = Nelements+1),
-                                    entry('Inputs',   struct = self.Inputs,   repeat = Nelements),
-                                    entry('Wind',     struct = self.Wind,     repeat = Nelements+1),
-                                    entry('PowerVar', struct = self.PowerVar, repeat = Nelements)
-                                ])
+        
+        Variables = [
+                        entry('States',   struct = self.States,   repeat = Nelements+1),
+                        entry('Inputs',   struct = self.Inputs,   repeat = Nelements),
+                        entry('Wind',     struct = self.Wind,     repeat = Nelements+1),
+                        entry('PowerVar', struct = self.PowerVar, repeat = Nelements)
+                    ]
+        
+        if not(isEmpty(self.Slacks)):
+            Variables.append(entry('Slacks',   struct = self.Slacks,   repeat = Nelements+1))
+            
+        Variables  = struct_msym(Variables)
         
         return Variables
     
@@ -239,6 +263,7 @@ class Turbine:
         #### Setup Local Cost and Constraints ####
         DynConst = []
         PowerConst = []
+        IneqConst = []
         Cost = 0
         
         #N elements
@@ -255,45 +280,67 @@ class Turbine:
                 
             [Power]       =  self.ElecPower.call([self.V['States',k],self.V['Inputs',k]])    
             PowerVar = Power - Power_minus
-            PowerConst.append(self.V['PowerVar',k]-PowerVar)
-        
-            #Power variation        
-            if (k == 0):
-                [StageCost] = self._StageCost.call([
-                                                    self.V['Inputs',k],
-                                                    self.V['States',k],
-                                                    self.V['Wind',k],
-                                                    self.EP['Inputs0'],
-                                                    self.EP['States0'],
-                                                    self.V['PowerVar',k]
-                                                    ])
-                Cost += StageCost
-            else:
-                [StageCost] = self._StageCost.call([
-                                                    self.V['Inputs',k],
-                                                    self.V['States',k],
-                                                    self.V['Wind',k],
-                                                    self.V['Inputs',k-1],
-                                                    self.V['States',k-1],
-                                                    self.V['PowerVar',k]
-                                                    ])
-            Cost += StageCost
+            PowerConst.append(self.V['PowerVar',k]-PowerVar)            
             
+            if (k == 0):
+                InputList = [ #Construct that better !!!
+                                self.V['Inputs',k],
+                                self.V['States',k],
+                                self.V['Wind',k],
+                                self.V['PowerVar',k],
+                                self.EP['Inputs0'],
+                                self.EP['States0']
+                            ]
+                
+            else:
+                InputList = [ #Construct that better !!!
+                                self.V['Inputs',k],
+                                self.V['States',k],                                
+                                self.V['Wind',k],
+                                self.V['PowerVar',k],
+                                self.V['Inputs',k-1],
+                                self.V['States',k-1]
+                            ]
+                
+            if not(isEmpty(self.Slacks)):
+                InputList.append(self.V['Slacks',k])
+                
+            #Stage cost
+            [StageCost]  = self._StageCost.call(InputList)
+            Cost += StageCost
+        
+            #Stage Inequality constraints
+            if hasattr(self,'_StageConst'):
+                [StageConst] = self._StageConst.call(InputList)
+                IneqConst.append(StageConst)
+                
         k = Nshooting
-        [TerminalCost] = self._TerminalCost.call([
-                                                    self.V['States',k],
-                                                    self.V['Wind',k],
-                                                    self.V['States',k-1]
-                                                ])
+        InputList = [
+                        self.V['States',k],
+                        self.V['Wind',k],
+                        self.V['States',k-1]
+                    ]
+        
+        if not(isEmpty(self.Slacks)):
+            InputList.append(self.V['Slacks',k])
+        
+        [TerminalCost] = self._TerminalCost.call(InputList)
         Cost += TerminalCost
-                             
+          
+        #Stage Inequality constraints
+        if hasattr(self,'_TerminalConst'):
+            [TerminalConst] = self._TerminalConst.call(InputList)
+            IneqConst.append(TerminalConst)                   
          
-        g =      struct_MX([
-                              entry('DynConst',      expr = DynConst),
-                              entry('PowerConst',    expr = PowerConst)
-                           ])     
+        glist = [
+                    entry('DynConst',      expr = DynConst),
+                    entry('PowerConst',    expr = PowerConst)
+                ]
         
-        
+        if not(isEmpty(IneqConst)):
+            glist.append(entry('IneqConst',     expr = IneqConst))
+            
+        g =      struct_MX(glist)     
         
         ConstFun = MXFunction([self.V,self.EP],[g])
         ConstFun.init()
@@ -394,6 +441,10 @@ class WindFarm:
         
         self.lbV    = V(-inf)
         self.ubV    = V( inf)
+
+        if hasattr(Turbine,'Slacks'):
+            self.lbV['Turbine',:,'Slacks'] = 0
+        
         self.init   = V()
         
     def Embedding(self,Wact, time):
@@ -415,7 +466,7 @@ class WindFarm:
         
         self.Solver['solver'].setInput(self.init,                   'x0')
         self.Solver['solver'].setInput(self.Solver['lbg'],         "lbg")
-        self.Solver['solver'].setInput(self.Solver['lbg'],         "ubg")
+        self.Solver['solver'].setInput(self.Solver['ubg'],         "ubg")
         self.Solver['solver'].setInput(self.lbV,                   "lbx")
         self.Solver['solver'].setInput(self.ubV,                   "ubx")
         self.Solver['solver'].setInput(self.EP,                      "p")
@@ -464,8 +515,11 @@ class WindFarm:
                         'dg' : DMatrix(solver['dg'].output()),
                         'g'  : DMatrix(solver[ 'g'].output()),
                         'lbX': DMatrix(self.lbV['Turbine',i] - V),
-                        'ubX': DMatrix(self.ubV['Turbine',i] - V)
+                        'ubX': DMatrix(self.ubV['Turbine',i] - V),
+                        'lbg': DMatrix(solver['lbg']),
+                        'ubg': DMatrix(solver['ubg'])
                         })
+            
         return QPs
     
     
@@ -495,6 +549,9 @@ class WindFarm:
             lbXi = DMatrix(QPs[i]['lbX'])
             ubXi = DMatrix(QPs[i]['ubX'])
             
+            lbgi = DMatrix(QPs[i]['lbg'])
+            ubgi = DMatrix(QPs[i]['ubg'])
+            
             #Index of the power variations
             IndexDual = list(V.i['PowerVar',veccat])
             
@@ -505,13 +562,13 @@ class WindFarm:
             
             #Set solver
 
-            self._QPsolver.setInput( Hi,   'h')
-            self._QPsolver.setInput( f_dual,   'g')
-            self._QPsolver.setInput( dgi,   'a')
-            self._QPsolver.setInput( lbXi, 'lbx')
-            self._QPsolver.setInput( ubXi, 'ubx')
-            self._QPsolver.setInput( -gi, 'lba')
-            self._QPsolver.setInput( -gi, 'uba')
+            self._QPsolver.setInput( Hi,      'h')
+            self._QPsolver.setInput( f_dual,  'g')
+            self._QPsolver.setInput( dgi,     'a')
+            self._QPsolver.setInput( lbXi,    'lbx')
+            self._QPsolver.setInput( ubXi,    'ubx')
+            self._QPsolver.setInput( lbgi-gi, 'lba')
+            self._QPsolver.setInput( ubgi-gi, 'uba')
     
             self._QPsolver.solve()
     

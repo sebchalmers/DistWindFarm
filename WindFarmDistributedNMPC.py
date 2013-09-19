@@ -123,7 +123,7 @@ plt.show()
 raw_input()
 plt.close()
 
-T = Turbine(Inputs = ['dbeta', 'Tg'], States = ['Og', 'beta'])
+T = Turbine(Inputs = ['dbeta', 'Tg'], States = ['Og', 'beta'] , Slacks = ['sOg'])
 
 
 #Cp interpolation
@@ -162,7 +162,10 @@ Cost  = (T.Inputs['Tg'] - T.InputsPrev['Tg'])**2#(1e-2*T.PowerVar/(0.5*rho*A)/Sc
 Cost += T.Inputs['dbeta']**2                                    # Pitch rate
 Cost += -Cp*T.Wind**3                                           # Power capture
 
+Cost += T.Slacks['sOg']
+
 CostTerminal = -Cp*T.Wind**3
+CostTerminal += T.Slacks['sOg']
 
 Cost         *= ScaleLocalCost
 CostTerminal *= ScaleLocalCost
@@ -215,7 +218,18 @@ for i in range(Nturbine):
     F.EP['Turbine',i,'Inputs0','Tg']    = Tg0*ScaleT
 F.EP['PowerVarRef']      = 0.
 
+
 Primal, Adjoints = F.Solve(WProfiles)
+
+time = {'States': [dt*k for k in range(Nshooting+1)],
+        'Inputs': [dt*k for k in range(Nshooting)]}
+
+timeNMPC = {'States': [dt*k for k in range(Nsimulation+1)],
+            'Inputs': [dt*k for k in range(Nsimulation)]}
+
+#F.PlotBasic(T, Primal, time, 'r')
+
+
 
 #Initial guess for the dual variables
 Dual = np.array(Adjoints['PowerConst']).reshape(Nshooting,1)
@@ -223,11 +237,7 @@ Dual = np.array(Adjoints['PowerConst']).reshape(Nshooting,1)
 ##### NMPC LOOP #####
 #Note: the initial conditions (and inputs) are communicated via F.EP, the wind profiles are sent independently
 
-time = {'States': [dt*k for k in range(Nshooting+1)],
-        'Inputs': [dt*k for k in range(Nshooting)]}
 
-timeNMPC = {'States': [dt*k for k in range(Nsimulation+1)],
-            'Inputs': [dt*k for k in range(Nsimulation)]}
 
 DistributedError = []
 
@@ -252,8 +262,8 @@ for k in range(Nsimulation):
                        
                        ##Plot
                        #plt.close('all')
-                       #F.PlotBasic(T, PrimalCentral,     time, 'k')
-                       
+                       #F.PlotBasic(T, PrimalDistributed,     time, 'r')
+                       #raw_input()
                        #if (ResidualLog[-1] > 10):
                        #                       F.PlotBasic(T, PrimalDistributed, time, 'r')
                        #                       assert(0==1)
