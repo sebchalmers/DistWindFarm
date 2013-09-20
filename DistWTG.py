@@ -53,7 +53,8 @@ def _setSolver(self, V,Cost,g,P):
     if ('IneqConst' in g.keys()):
         print "Turbine Solver"
         lbg['IneqConst'] = -inf
-        ubg['IneqConst'] =  inf
+        ubg['IneqConst'] =  0
+
         
     if hasattr(self,'Nturbine'):
         print "Wind Farm Solver"
@@ -62,7 +63,7 @@ def _setSolver(self, V,Cost,g,P):
             if (key in key_list):
                 print key
                 lbg[key] = -inf
-                ubg[key] =  inf
+                ubg[key] =  0
                 
     
     nl = MXFunction(nlpIn(x=V,p=P),nlpOut(f=Cost,g=g))
@@ -384,14 +385,22 @@ class Turbine:
             self._Functions['IneqConst'] = IneqConstFun
         
         
-        #Create QP solver
-        gLocal = EquConst
-        if self._hasIneqConst:
-            gLocal.append(entry('IneqConst', expr = IneqConst))
-            
-        gLocal = struct_MX(gLocal)  
-        self._g = gLocal
+        #Create QP solver having the same (lcoal) structure as the central problem          
+        [     Cost] = self._Functions[     'Cost'].call([ self.V, self.EP ])
+        [ EquConst] = self._Functions[ 'EquConst'].call([ self.V, self.EP ])
         
+        Const = [
+                    entry('EquConst',   expr = EquConst)
+                ]
+        
+        if self._hasIneqConst:
+            [IneqConst] = self._Functions['IneqConst'].call([self.V, self.EP ])
+            Const.append(entry('IneqConst', expr = IneqConst))
+
+        gLocal = struct_MX(Const)
+        
+        self._g = gLocal
+                
         #Create a local solver to generate the underlying QP
         Solver = _setSolver(self,self.V,Cost,gLocal,self.EP)
         self._Solver = Solver
@@ -419,6 +428,7 @@ class WindFarm:
         self._QPsolver      = Turbine._QPsolver
         self._VTurbine      = Turbine.V
         self._Shoot         = Turbine.Shoot
+        self._gLocal        = Turbine._g
         
         #Do the wind turbines have inequality constraints ?
         if hasattr(Turbine,'_TerminalConst') or hasattr(Turbine,'_StageConst'):
@@ -543,12 +553,16 @@ class WindFarm:
         for i in range(self.Nturbine):
             EP = self.EP['Turbine',i]
             V = Primal['Turbine',i]
-            mu = Adjoint['Turbine'+str(i)+'_EquConst']
             
+            Mu = self._gLocal()
+            Mu['EquConst']      = Adjoint['Turbine'+str(i)+'_EquConst']
+            if self._hasIneqConst:
+                Mu['IneqConst'] = Adjoint['Turbine'+str(i)+'_IneqConst']
+                        
             solver['H'].setInput(V, 0)
             solver['H'].setInput(1.,1)
             solver['H'].setInput(1.,2)
-            solver['H'].setInput(mu,3)
+            solver['H'].setInput(Mu,3)
             solver['H'].evaluate()
         
             solver['f'].setInput(V, 0)
@@ -654,9 +668,10 @@ class WindFarm:
             Mu = MuBound+Mug
             
             
-            #Construct Active Set and Active bounds
+            #Construct Active Set, Active bounds and Active Constraints
             AS = []
             AB = []
+            Ag = []
             BoundsGap = np.abs(ub - lb)
             lb_gap = lb - np.dot(A,X)
             ub_gap = np.dot(A,X) - ub
@@ -665,7 +680,10 @@ class WindFarm:
                     AS.append(line)                    
                     if (line < X.shape[0]):
                         AB.append(line)
-                    
+                    else:
+                        Ag.append(line-X.shape[0])    
+                        #print Mug[i], lbgi[i], gi[i], ubgi[i]
+
             ###############################################
            
             #Construct dual homotopy (work on the AS)
@@ -753,8 +771,13 @@ class WindFarm:
             #   Homotopy[  'Dual']['Matrices']*DualStep <= Homotopy[  'Dual']['RHS']
             #
             
+
+            
             dPrimal.append(dPrimalAdjoint[:X.shape[0],:])
-            dAdjoint.append(dPrimalAdjoint[X.shape[0]+len(AB):,:])
+            dAdjoint_i = np.zeros([self._gLocal.shape[0],self.Nshooting])
+            for index, adjindex in enumerate(Ag):
+                dAdjoint_i[adjindex,:] = dPrimalAdjoint[X.shape[0]+len(AB)+index,:]
+            dAdjoint.append(dAdjoint_i)
             
             #dAdjoint SHOULD NOT NEED TO EXIST...
             
@@ -770,7 +793,11 @@ class WindFarm:
             
             Xall.append(V(X))
     
-            AdjointUpdate['Turbine'+str(i)+'_EquConst'] = np.array(self._QPsolver.output('lam_a'))
+            AdjointQP = self._gLocal(self._QPsolver.output('lam_a'))
+    
+            for key in AdjointQP.keys():
+                AdjointUpdate['Turbine'+str(i)+'_'+key] = AdjointQP[key]
+                
         return Xall, AdjointUpdate, DualHess, dPrimal, dAdjoint, Homotopy, Status
 
     def DistributedSQP(self, Primal, Adjoint,Dual, Wact, time = 0, iter_SQP = 1,iter_Dual = 1, FullDualStep = True, ReUpdate = False):
@@ -851,7 +878,13 @@ class WindFarm:
             if (ReUpdate == True):
                 for i in range(self.Nturbine):
                     StepLocal[i] = self._VTurbine(StepLocal[i].cat + np.dot(dPrimal[i],-tstep*StepDual))
-                    Adjoint['Turbine'+str(i)+'_EquConst'] += np.dot(dAdjoint[i],-tstep*StepDual)
+                    
+                    AdjointUpdate = self._gLocal()
+                    #print AdjointUpdate.shape
+                    #print np.dot(dAdjoint[i],-tstep*StepDual).shape
+                    #raw_input()
+                    for key in AdjointUpdate.keys():
+                        Adjoint['Turbine'+str(i)+'_'+key] = AdjointUpdate[key]
                 
                 Stepz = self.EP['PowerVarRef',veccat]-Primal['PowerVar',veccat] - Dual/float(self.PowerSmoothingWeight)
                 

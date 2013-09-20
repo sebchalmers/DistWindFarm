@@ -170,21 +170,21 @@ CostTerminal = -Cp*T.Wind**3
 Cost         *= ScaleLocalCost
 CostTerminal *= ScaleLocalCost
 
-StageIneqConst = [
-                        T.Inputs['Tg'], 
-                 ]
-    
-TerminalIneqConst = [
-                        T.States['beta']
-            ]
-
-#IneqConst = [
-#                        Ogmin  - T.States['Og'], # <= 0 - T.Slacks['sOg']
-#                       -Ogmax  + T.States['Og']  # <= 0 - T.Slacks['sOg']
+#StageIneqConst = [
+#                        T.Inputs['Tg'], 
+#                 ]
+#    
+#TerminalIneqConst = [
+#                        T.States['beta']
 #            ]
 
-#T.setIneqConst(StageIneqConst)
-#T.setIneqConst(TerminalIneqConst, Terminal = True)
+IneqConst = [
+                        Ogmin  - T.States['Og'],# - T.Slacks['sOg'], # <= 0 
+                       -Ogmax  + T.States['Og'] #- T.Slacks['sOg']  # <= 0 
+            ]
+
+#T.setIneqConst(IneqConst)
+#T.setIneqConst(IneqConst, Terminal = True)
 
 #Define Electrical Power
 T.ElecPower(T.Inputs['Tg']*T.States['Og'])
