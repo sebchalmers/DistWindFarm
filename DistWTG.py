@@ -643,7 +643,7 @@ class WindFarm:
             #  lb   <= A*X  <= ub
             #
             # Mu are the associated multipliers
-            #
+            # A has as many lines as there are Mu:s
             
             lb = np.concatenate([np.array(lbXi),np.array(lbgi)])
             ub = np.concatenate([np.array(ubXi),np.array(ubgi)])
@@ -671,23 +671,14 @@ class WindFarm:
                 if (lbV_gap[ivar] >= -abs(MuBound[ivar])) or (ubV_gap[ivar] >= -abs(MuBound[ivar])) or (BoundsGapV[ivar] < eps):
                     AB.append(ivar)
 
-            #Active constraints
-            ABg = []
-            gGap = np.abs(np.array(lbgi) - np.array(ubgi))
-            lbg_gap = np.array(lbgi) - np.dot(dgi,X)
-            ubg_gap = np.dot(dgi,X) - np.array(ubgi)
-            for ivar in range(dgi.shape[0]):
-                if (lbg_gap[ivar] >= -abs(Mug[ivar])) or (ubg_gap[ivar] >= -abs(Mug[ivar])) or (gGap[ivar] < eps):
-                    ABg.append(ivar)
-            
-            #Construct dual homotopy (work on the AB)
+           
+            #Construct dual homotopy (work on the AS)
             # sign(MuBound)*(MuBound + dMu) >= 0 hence  -sign(MuBound)*dMu =<  |MuBound|
             
-
             HomotopyDualMAT = []
             HomotopyDualRHS = []
             for m, ivar in enumerate(AS):
-                HomotopyDualMAT.append(np.sign(Mu[ivar]))
+                HomotopyDualMAT.append(np.sign(Mu[ivar])) #SIGN IS WRONG... DUNNO WHY
                 if (BoundsGap[ivar] > eps):
                     HomotopyDualRHS.append(abs(Mu[ivar]))
                 else:
@@ -698,27 +689,27 @@ class WindFarm:
             HomotopyDualRHS = np.array(HomotopyDualRHS).reshape(len(HomotopyDualRHS),1)
                 
             #Construct primal homotopy 
-            #       lbXi <= X + dX <= ubXi
-            # i.e.  lbXi - X <= dX <= ubXi - X
+            #       lb <= A*(X + dX) <= ubXi
+            # i.e.  lb - A*X <= A*dX <= ubXi - A*X
             # or
-            # 1. dX <= -ubV_gap and 2. -dX <= -lbV_gap  constructed seperately 
+            # 1. A*dX <= -ubV_gap and 2. -A*dX <= -lbV_gap  constructed seperately 
             #
             # i.e. check
             #
-            # [ I] * dX <= -[ubV_gap]
-            # [-I]          [lbV_gap]
+            # [ A] * dX <= -[ub_gap]
+            # [-A]          [lb_gap]
         
-            HomotopyPrimalMAT = np.concatenate([np.eye(X.shape[0]),-np.eye(X.shape[0])],axis=0) 
+            HomotopyPrimalMAT = np.concatenate([A,-A],axis=0) 
             RHSub = []
             RHSlb = []
-            for ivar in range(X.shape[0]): 
-                if (BoundsGap[ivar] > eps) and (ubV_gap[ivar] < -abs(MuBound[ivar])):
-                    RHSub.append(-ubV_gap[ivar]) #Check only inactive bounds
+            for ivar in range(A.shape[0]): 
+                if (BoundsGap[ivar] > eps) and (ub_gap[ivar] < -abs(Mu[ivar])):
+                    RHSub.append(-ub_gap[ivar]) #Check only inactive bounds
                 else:
                     RHSub.append(inf) #Do not check primal variables blocked by collapsed constraints
 
-                if (BoundsGap[ivar] > eps) and (lbV_gap[ivar] < -abs(MuBound[ivar])):
-                    RHSlb.append(-lbV_gap[ivar]) #Check only inactive bounds
+                if (BoundsGap[ivar] > eps) and (lb_gap[ivar] < -abs(Mu[ivar])):
+                    RHSlb.append(-lb_gap[ivar]) #Check only inactive bounds
                 else:
                     RHSlb.append(inf) #Do not check primal variables blocked by collapsed constraints
             
@@ -767,8 +758,9 @@ class WindFarm:
             #
             
             dPrimal.append(dPrimalAdjoint[:X.shape[0],:])
-            dMuBound.append(dPrimalAdjoint[X.shape[0]:X.shape[0]+len(AB),:])
             dAdjoint.append(dPrimalAdjoint[X.shape[0]+len(AB):,:])
+            
+            #dAdjoint SHOULD NOT NEED TO EXIST...
             
             dMu.append(dPrimalAdjoint[X.shape[0]:,:])
             
