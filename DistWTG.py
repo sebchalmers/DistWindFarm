@@ -53,7 +53,7 @@ def _setSolver(self, V,Cost,g,P):
     if ('IneqConst' in g.keys()):
         print "Turbine Solver"
         lbg['IneqConst'] = -inf
-        
+        ubg['IneqConst'] =  inf
         
     if hasattr(self,'Nturbine'):
         print "Wind Farm Solver"
@@ -342,8 +342,9 @@ class Turbine:
         if hasattr(self,'Slacks'):
             InputList.append(self.V['Slacks',k])
         
-        [TerminalCost] = self._TerminalCost.call(InputList)
-        Cost += TerminalCost
+        if hasattr(self,'_TerminalCost'):
+            [TerminalCost] = self._TerminalCost.call(InputList)
+            Cost += TerminalCost
           
         #Stage Inequality constraints
         if hasattr(self,'_TerminalConst'):
@@ -359,13 +360,15 @@ class Turbine:
                    ]
         
         g = EquConst
-                
+        
         if self._hasIneqConst:
+            g.append(entry('IneqConst', expr = IneqConst))
+            
             IneqConst = [
                          entry('IneqConst', expr = IneqConst)
                         ]
         
-            g += IneqConst
+            
          
         g = struct_MX(g)  
         self._g = g
@@ -375,11 +378,12 @@ class Turbine:
         EquConstFun.init()
         self._Functions['EquConst'] = EquConstFun
           
+        ##Create Cost function
         CostFun  = MXFunction([self.V,self.EP],[Cost])
         CostFun.init()
         self._Functions['Cost'] = CostFun
         
-        #Create IneqConst function (conditional)
+        #Create IneqConst function (if applicable)
         if self._hasIneqConst:
             IneqConstFun = MXFunction([self.V,self.EP],[struct_MX(IneqConst)])
             IneqConstFun.init()

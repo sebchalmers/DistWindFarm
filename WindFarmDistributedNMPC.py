@@ -123,7 +123,7 @@ plt.show()
 raw_input()
 plt.close()
 
-T = Turbine(Inputs = ['dbeta', 'Tg'], States = ['Og', 'beta'], Slacks = ['sOg'])
+T = Turbine(Inputs = ['dbeta', 'Tg'], States = ['Og', 'beta'])#, Slacks = ['sOg'])
 
 
 #Cp interpolation
@@ -162,16 +162,16 @@ Cost  = (T.Inputs['Tg'] - T.InputsPrev['Tg'])**2#(1e-2*T.PowerVar/(0.5*rho*A)/Sc
 Cost += T.Inputs['dbeta']**2                                    # Pitch rate
 Cost += -Cp*T.Wind**3                                           # Power capture
 
-Cost += T.Slacks['sOg']
+#Cost += T.Slacks['sOg']
 
 CostTerminal = -Cp*T.Wind**3
-CostTerminal += T.Slacks['sOg']
+#CostTerminal += T.Slacks['sOg']
 
 Cost         *= ScaleLocalCost
 CostTerminal *= ScaleLocalCost
 
 IneqConst = [
-                        T.States['Og']
+                        T.Inputs['Tg']
             ]
     
 #IneqConst = [
@@ -179,7 +179,7 @@ IneqConst = [
 #                       -Ogmax  + T.States['Og']  # <= 0 - T.Slacks['sOg']
 #            ]
 
-#T.setIneqConst(IneqConst)
+T.setIneqConst(IneqConst)
 #T.setIneqConst(IneqConst, Terminal = True)
 
 #Define Electrical Power
@@ -244,7 +244,7 @@ timeNMPC = {'States': [dt*k for k in range(Nsimulation+1)],
             'Inputs': [dt*k for k in range(Nsimulation)]}
 
 F.PlotBasic(T, Primal, time, 'r')
-
+assert(0==1)
 #Initial guess for the dual variables
 Dual = np.array(Adjoints['PowerConst']).reshape(Nshooting,1)
 
