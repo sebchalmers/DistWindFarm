@@ -170,17 +170,21 @@ CostTerminal = -Cp*T.Wind**3
 Cost         *= ScaleLocalCost
 CostTerminal *= ScaleLocalCost
 
-#IneqConst = [
-#                        T.Inputs['Tg']
-#            ]
+StageIneqConst = [
+                        T.Inputs['Tg'], 
+                 ]
     
+TerminalIneqConst = [
+                        T.States['beta']
+            ]
+
 #IneqConst = [
 #                        Ogmin  - T.States['Og'], # <= 0 - T.Slacks['sOg']
 #                       -Ogmax  + T.States['Og']  # <= 0 - T.Slacks['sOg']
 #            ]
 
-#T.setIneqConst(IneqConst)
-#T.setIneqConst(IneqConst, Terminal = True)
+#T.setIneqConst(StageIneqConst)
+#T.setIneqConst(TerminalIneqConst, Terminal = True)
 
 #Define Electrical Power
 T.ElecPower(T.Inputs['Tg']*T.States['Og'])
@@ -189,8 +193,6 @@ T.setCost(Cost)
 T.setCost(CostTerminal, Terminal = True)
 
 T.setTurbine(Nshooting = Nshooting, Nsimulation = Nsimulation)
-
-
 
 F = WindFarm(T, Nturbine = Nturbine, PowerSmoothingWeight = PowerSmoothingWeight)
 
@@ -207,7 +209,6 @@ Power0 = Tg0*Og0*ScaleT
 
 F.init['Turbine',:,'States',:,'Og']   =  Og0
 F.init['Turbine',:,'States',:,'beta'] =  BetaOpt
-
 
 F.lbV['Turbine',:,'States',:,'Og']    =  Ogmin
 F.ubV['Turbine',:,'States',:,'Og']    =  Ogmax
@@ -233,6 +234,18 @@ for i in range(Nturbine):
     F.EP['Turbine',i,'Inputs0','Tg']    = Tg0*ScaleT
 F.EP['PowerVarRef']      = 0.
 
+#X = T.States(100)
+#U = T.Inputs()
+#U['Tg'] = 10.
+#W = 0
+#PowerVar = 0
+#Xprev = T.States()
+#Uprev = T.Inputs()
+#
+#for i, var in enumerate([U, X, W, PowerVar, Uprev, Xprev]):
+#    T._StageConst.setInput(var,i)
+#T._StageConst.evaluate()
+#print T._StageConst.output()
 
 
 Primal, Adjoints = F.Solve(WProfiles)
@@ -245,6 +258,29 @@ timeNMPC = {'States': [dt*k for k in range(Nsimulation+1)],
 
 #F.PlotBasic(T, Primal, time, 'r')
 #assert(0==1)
+#gopt = F.g(F.Solver['solver'].output('g'))
+
+#for i, key in enumerate(['Turbine'+str(i)+'_IneqConst' for i in range(Nturbine)]):
+#                       
+#                       print "\n\n\n ############ Turbine", i , "#############"
+#                       print "L Bound sent", F.Solver['lbg'][key]
+#                       print "L Bound used", F._lbg[key]
+#                       print "U Bound sent", F.Solver['ubg'][key]
+#                       print "U Bound used", F._ubg[key]
+#                       print "g value   "  , gopt[key]
+                       
+#print F.Solver['solver'].getInput(4)
+#print F.Solver['solver'].getInput(5)
+#print F.Solver['solver'].output('g')
+#
+#plt.figure(666)
+#plt.plot(F.Solver['solver'].output('g'),label = 'g out',color = 'r')
+#plt.plot(F.Solver['solver'].getInput(4),label = 'lbg',linewidth = 2,color = 'k')
+#plt.plot(F.Solver['solver'].getInput(5),label = 'ubg',linewidth = 2,color = 'k')
+#plt.legend()
+#plt.show()
+#assert(0==1)
+
 #Initial guess for the dual variables
 Dual = np.array(Adjoints['PowerConst']).reshape(Nshooting,1)
 

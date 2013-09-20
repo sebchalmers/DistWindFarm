@@ -140,7 +140,7 @@ class Turbine:
             return
 
         
-        print "Right-Hand side: ", RHS
+        #print "Right-Hand side: ", RHS
         
         if isinstance(RHS,list):
             RHS = veccat(RHS)
@@ -330,7 +330,7 @@ class Turbine:
             if hasattr(self,'_StageConst'):
                 [StageConst] = self._StageConst.call(InputList)
                 IneqConst.append(StageConst)
-                
+                print StageConst
         #Terminal stuff
         k = Nshooting
         InputList = [
@@ -359,19 +359,13 @@ class Turbine:
                     entry('PowerConst',  expr = PowerConst)
                    ]
         
-        g = EquConst
         
-        if self._hasIneqConst:
-            g.append(entry('IneqConst', expr = IneqConst))
-            
-            IneqConst = [
-                         entry('IneqConst', expr = IneqConst)
-                        ]
+        if self._hasIneqConst:           
+            IneqConstEntry = [
+                              entry('IneqConst', expr = IneqConst)
+                             ]
         
-            
-         
-        g = struct_MX(g)  
-        self._g = g
+        
         
         ##Create EquConst function 
         EquConstFun = MXFunction([self.V,self.EP],[struct_MX(EquConst)])
@@ -385,12 +379,21 @@ class Turbine:
         
         #Create IneqConst function (if applicable)
         if self._hasIneqConst:
-            IneqConstFun = MXFunction([self.V,self.EP],[struct_MX(IneqConst)])
+            IneqConstFun = MXFunction([self.V,self.EP],[struct_MX(IneqConstEntry)])
             IneqConstFun.init()
             self._Functions['IneqConst'] = IneqConstFun
         
+        
+        #Create QP solver
+        gLocal = EquConst
+        if self._hasIneqConst:
+            gLocal.append(entry('IneqConst', expr = IneqConst))
+            
+        gLocal = struct_MX(gLocal)  
+        self._g = gLocal
+        
         #Create a local solver to generate the underlying QP
-        Solver = _setSolver(self,self.V,Cost,g,self.EP)
+        Solver = _setSolver(self,self.V,Cost,gLocal,self.EP)
         self._Solver = Solver
         
         #Prepare the QP call
@@ -477,6 +480,7 @@ class WindFarm:
             Const.append(entry('Turbine'+str(i)+'_EquConst', expr = EquConst_i))
             
             if self._hasIneqConst:
+                print "Ineq"
                 [IneqConst_i] = Turbine._Functions['IneqConst'].call([ V['Turbine',i], EP['Turbine',i] ])
                 Const.append(entry('Turbine'+str(i)+'_IneqConst', expr = IneqConst_i))
             
@@ -512,9 +516,6 @@ class WindFarm:
         
         self.Embedding(Wact, time)
         
-        print self.Solver['lbg'].cat
-        print self.Solver['ubg'].cat
-        
         self.Solver['solver'].setInput(self.init,                   'x0')
         self.Solver['solver'].setInput(self.Solver['lbg'],         "lbg")
         self.Solver['solver'].setInput(self.Solver['ubg'],         "ubg")
@@ -523,10 +524,12 @@ class WindFarm:
         self.Solver['solver'].setInput(self.EP,                      "p")
             
         self.Solver['solver'].solve()
-        #print np.array(self.Solver['solver'].output('x'))
+        
+        self._lbg = self.Solver['lbg']
+        self._ubg = self.Solver['ubg']
         
         Adjoints = self.g(np.array(self.Solver['solver'].output('lam_g')))
-        Primal  = self.V(np.array(self.Solver['solver'].output('x')))
+        Primal   = self.V(np.array(self.Solver['solver'].output('x')))
         
         return Primal, Adjoints
     
@@ -651,7 +654,7 @@ class WindFarm:
             Mu = MuBound+Mug
             
             
-            #Construct Active Set
+            #Construct Active Set and Active bounds
             AS = []
             AB = []
             BoundsGap = np.abs(ub - lb)
@@ -659,22 +662,11 @@ class WindFarm:
             ub_gap = np.dot(A,X) - ub
             for line in range(A.shape[0]):
                 if (lb_gap[line] >= -abs(Mu[line])) or (ub_gap[line] >= -abs(Mu[line])) or (BoundsGap[line] < eps):
-                    AS.append(line)
-                    
+                    AS.append(line)                    
                     if (line < X.shape[0]):
                         AB.append(line)
                     
             ###############################################
-            
-            #Active bounds # That shall not be needed...
-            #AB  = []
-            #BoundsGapV = np.abs(np.array(ubXi) - np.array(lbXi))
-            #lbV_gap = np.array(lbXi) - X
-            #ubV_gap = X - np.array(ubXi)
-            #for ivar in range(X.shape[0]):
-            #    if (lbV_gap[ivar] >= -abs(MuBound[ivar])) or (ubV_gap[ivar] >= -abs(MuBound[ivar])) or (BoundsGapV[ivar] < eps):
-            #        AB.append(ivar)
-
            
             #Construct dual homotopy (work on the AS)
             # sign(MuBound)*(MuBound + dMu) >= 0 hence  -sign(MuBound)*dMu =<  |MuBound|
