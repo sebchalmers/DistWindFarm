@@ -586,6 +586,7 @@ class WindFarm:
         dPrimal        = []
         dAdjoint       = []
         dMuBound       = []
+        dMu            = []
         
         Homotopy = {'Primal':{'Matrices': [], 'RHS':[]}, 'Dual':{'Matrices': [], 'RHS':[]}}
         
@@ -663,11 +664,11 @@ class WindFarm:
             
             #Active bounds
             AB  = []
-            BoundsGap = np.abs(np.array(ubXi) - np.array(lbXi))
+            BoundsGapV = np.abs(np.array(ubXi) - np.array(lbXi))
             lbV_gap = np.array(lbXi) - X
             ubV_gap = X - np.array(ubXi)
             for ivar in range(X.shape[0]):
-                if (lbV_gap[ivar] >= -abs(MuBound[ivar])) or (ubV_gap[ivar] >= -abs(MuBound[ivar])) or (BoundsGap[ivar] < eps):
+                if (lbV_gap[ivar] >= -abs(MuBound[ivar])) or (ubV_gap[ivar] >= -abs(MuBound[ivar])) or (BoundsGapV[ivar] < eps):
                     AB.append(ivar)
 
             #Active constraints
@@ -682,12 +683,13 @@ class WindFarm:
             #Construct dual homotopy (work on the AB)
             # sign(MuBound)*(MuBound + dMu) >= 0 hence  -sign(MuBound)*dMu =<  |MuBound|
             
+
             HomotopyDualMAT = []
             HomotopyDualRHS = []
-            for m, ivar in enumerate(AB):
-                HomotopyDualMAT.append(np.sign(MuBound[ivar]))
+            for m, ivar in enumerate(AS):
+                HomotopyDualMAT.append(np.sign(Mu[ivar]))
                 if (BoundsGap[ivar] > eps):
-                    HomotopyDualRHS.append(abs(MuBound[ivar]))
+                    HomotopyDualRHS.append(abs(Mu[ivar]))
                 else:
                     HomotopyDualRHS.append(inf) #Do not check a multiplier associated to a collpased constraint
 
@@ -727,19 +729,13 @@ class WindFarm:
             # HomotopyPrimalMAT * dX       <= HomotopyPrimalRHS
             # HomotopyDualMAT   * dMuBound <= HomotopyDualRHS
             
-            #Block the active constraints
-            # gActive = [Active bounds
-            #                dg       ], i.e. (1st simple bounds, 2nd A*X = b)
-            
-            block = np.zeros([len(AB),X.shape[0]])
-            for line, col in enumerate(AB):
-                block[line,col] = 1.
-            gActive = np.concatenate([block,QPs[i]['dg'][ABg,:]],axis = 0)
+            #Active constraints & bounds          
+            dgActive = A[AS,:]
             
             # KKT Matrix
-            KKTMat = np.concatenate([QPs[i]['H'],gActive],axis = 0)
-            Nconst = gActive.shape[0]
-            Addon = np.concatenate([gActive.T,np.zeros([Nconst,Nconst])])
+            KKTMat = np.concatenate([QPs[i]['H'],dgActive],axis = 0)
+            Nconst = dgActive.shape[0]
+            Addon = np.concatenate([dgActive.T,np.zeros([Nconst,Nconst])])
             KKT = np.concatenate([KKTMat,Addon],axis = 1)
     
             #Right-hand side
@@ -774,10 +770,12 @@ class WindFarm:
             dMuBound.append(dPrimalAdjoint[X.shape[0]:X.shape[0]+len(AB),:])
             dAdjoint.append(dPrimalAdjoint[X.shape[0]+len(AB):,:])
             
+            dMu.append(dPrimalAdjoint[X.shape[0]:,:])
+            
             Homotopy['Primal']['Matrices'].append(np.dot(HomotopyPrimalMAT,dPrimal[-1]))
             Homotopy['Primal'][     'RHS'].append(HomotopyPrimalRHS)
             
-            Homotopy[  'Dual']['Matrices'].append(np.dot(HomotopyDualMAT,dMuBound[-1]))
+            Homotopy[  'Dual']['Matrices'].append(np.dot(HomotopyDualMAT,dMu[-1]))
             Homotopy[  'Dual'][     'RHS'].append(HomotopyDualRHS)
             
             DualHess -= dPrimalAdjoint[IndexDual]
