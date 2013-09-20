@@ -170,16 +170,16 @@ CostTerminal = -Cp*T.Wind**3
 Cost         *= ScaleLocalCost
 CostTerminal *= ScaleLocalCost
 
-IneqConst = [
-                        T.Inputs['Tg']
-            ]
+#IneqConst = [
+#                        T.Inputs['Tg']
+#            ]
     
 #IneqConst = [
 #                        Ogmin  - T.States['Og'], # <= 0 - T.Slacks['sOg']
 #                       -Ogmax  + T.States['Og']  # <= 0 - T.Slacks['sOg']
 #            ]
 
-T.setIneqConst(IneqConst)
+#T.setIneqConst(IneqConst)
 #T.setIneqConst(IneqConst, Terminal = True)
 
 #Define Electrical Power
@@ -243,8 +243,8 @@ time = {'States': [dt*k for k in range(Nshooting+1)],
 timeNMPC = {'States': [dt*k for k in range(Nsimulation+1)],
             'Inputs': [dt*k for k in range(Nsimulation)]}
 
-F.PlotBasic(T, Primal, time, 'r')
-assert(0==1)
+#F.PlotBasic(T, Primal, time, 'r')
+#assert(0==1)
 #Initial guess for the dual variables
 Dual = np.array(Adjoints['PowerConst']).reshape(Nshooting,1)
 
