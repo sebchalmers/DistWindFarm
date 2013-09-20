@@ -51,7 +51,19 @@ def _setSolver(self, V,Cost,g,P):
     lbg = g()
     ubg = g()
     if ('IneqConst' in g.keys()):
+        print "Turbine Solver"
         lbg['IneqConst'] = -inf
+        
+        
+    if hasattr(self,'Nturbine'):
+        print "Wind Farm Solver"
+        key_list = ['Turbine'+str(i)+'_IneqConst' for i in range(self.Nturbine)]
+        for key in g.keys():
+            if (key in key_list):
+                print key
+                lbg[key] = -inf
+                ubg[key] =  inf
+                
     
     nl = MXFunction(nlpIn(x=V,p=P),nlpOut(f=Cost,g=g))
     nl.init()
@@ -108,12 +120,13 @@ class Turbine:
         # lists of names (strings)
         self.States            = struct_ssym(StateList)
         self.Inputs            = struct_ssym(InputList)
-        self.Slacks            = struct_ssym(SlackList)
         self.StatesPrev        = struct_ssym(StateList)
         self.InputsPrev        = struct_ssym(InputList)
         self.Wind              = W
         self.PowerVar          = P
             
+        if (len(SlackList) > 0):
+            self.Slacks        = struct_ssym(SlackList)
     
     def ElecPower(self, expr):
         Power = SXFunction([self.States,self.Inputs],[expr])
@@ -165,11 +178,13 @@ class Turbine:
 
         X           = self.States
         U           = self.Inputs
-        Slacks      = self.Slacks
         Uprev       = self.InputsPrev
         Xprev       = self.StatesPrev
         PowerVar    = self.PowerVar
         W           = self.Wind  
+            
+        if hasattr(self,'Slacks'):
+            Slacks      = self.Slacks
             
         #CAREFUL, THE INPUT SCHEME MUST MATCH THE FUNCTION CALLS !!
         if Terminal == False:
@@ -177,7 +192,7 @@ class Turbine:
         else:
             listFuncInput = [X, W, Xprev]
         
-        if not(isEmpty(Slacks)):    
+        if hasattr(self,'Slacks'):    
             listFuncInput.append(Slacks)
             
         Func = SXFunction(listFuncInput,[Expr])
@@ -185,7 +200,7 @@ class Turbine:
         
         return Func
 
-    def setConstraints(self, Const, Terminal = False):
+    def setIneqConst(self, Const, Terminal = False):
         
         if (self._frozen == True):
             print "Wind farm already created, call ignored"
@@ -237,7 +252,7 @@ class Turbine:
                         entry('PowerVar', struct = self.PowerVar, repeat = Nelements)
                     ]
         
-        if not(isEmpty(self.Slacks)):
+        if hasattr(self,'Slacks'):
             Variables.append(entry('Slacks',   struct = self.Slacks,   repeat = Nelements+1))
             
         Variables  = struct_msym(Variables)
@@ -246,6 +261,11 @@ class Turbine:
     
     def setTurbine(self, Nshooting = 50, Nsimulation = 50 ):
         
+        if hasattr(self,'_TerminalConst') or hasattr(self,'_StageConst'):
+            self._hasIneqConst = True
+        else:
+            self._hasIneqConst = False    
+            
         self.Nshooting   = Nshooting
         self.Nsimulation = Nsimulation
         
@@ -261,9 +281,9 @@ class Turbine:
         
 
         #### Setup Local Cost and Constraints ####
-        DynConst = []
         PowerConst = []
-        IneqConst = []
+        DynConst   = []
+        IneqConst  = []
         Cost = 0
         
         #N elements
@@ -282,27 +302,24 @@ class Turbine:
             PowerVar = Power - Power_minus
             PowerConst.append(self.V['PowerVar',k]-PowerVar)            
             
-            if (k == 0):
-                InputList = [ #Construct that better !!!
-                                self.V['Inputs',k],
-                                self.V['States',k],
-                                self.V['Wind',k],
-                                self.V['PowerVar',k],
-                                self.EP['Inputs0'],
-                                self.EP['States0']
-                            ]
-                
-            else:
-                InputList = [ #Construct that better !!!
+            InputList = [ 
                                 self.V['Inputs',k],
                                 self.V['States',k],                                
                                 self.V['Wind',k],
-                                self.V['PowerVar',k],
-                                self.V['Inputs',k-1],
-                                self.V['States',k-1]
-                            ]
+                                self.V['PowerVar',k]
+                        ]
+            
+            if (k == 0):
+                InputList.append(self.EP['Inputs0'])
+                InputList.append(self.EP['States0'])
                 
-            if not(isEmpty(self.Slacks)):
+            else:
+                InputList.append(self.V['Inputs',k-1])
+                InputList.append(self.V['States',k-1])
+                              
+         
+            
+            if hasattr(self,'Slacks'):
                 InputList.append(self.V['Slacks',k])
                 
             #Stage cost
@@ -314,6 +331,7 @@ class Turbine:
                 [StageConst] = self._StageConst.call(InputList)
                 IneqConst.append(StageConst)
                 
+        #Terminal stuff
         k = Nshooting
         InputList = [
                         self.V['States',k],
@@ -321,7 +339,7 @@ class Turbine:
                         self.V['States',k-1]
                     ]
         
-        if not(isEmpty(self.Slacks)):
+        if hasattr(self,'Slacks'):
             InputList.append(self.V['Slacks',k])
         
         [TerminalCost] = self._TerminalCost.call(InputList)
@@ -330,25 +348,42 @@ class Turbine:
         #Stage Inequality constraints
         if hasattr(self,'_TerminalConst'):
             [TerminalConst] = self._TerminalConst.call(InputList)
-            IneqConst.append(TerminalConst)                   
-         
-        glist = [
-                    entry('DynConst',      expr = DynConst),
-                    entry('PowerConst',    expr = PowerConst)
-                ]
+            IneqConst.append(TerminalConst)
         
-        if not(isEmpty(IneqConst)):
-            glist.append(entry('IneqConst',     expr = IneqConst))
+        self._Functions = {}
             
-        g =      struct_MX(glist)     
+        #Construct Constraints Structure
+        EquConst = [
+                    entry('DynConst',    expr = DynConst),
+                    entry('PowerConst',  expr = PowerConst)
+                   ]
         
-        ConstFun = MXFunction([self.V,self.EP],[g])
-        ConstFun.init()
-        self._Const = ConstFun
+        g = EquConst
+                
+        if self._hasIneqConst:
+            IneqConst = [
+                         entry('IneqConst', expr = IneqConst)
+                        ]
         
+            g += IneqConst
+         
+        g = struct_MX(g)  
+        self._g = g
+        
+        ##Create EquConst function 
+        EquConstFun = MXFunction([self.V,self.EP],[struct_MX(EquConst)])
+        EquConstFun.init()
+        self._Functions['EquConst'] = EquConstFun
+          
         CostFun  = MXFunction([self.V,self.EP],[Cost])
         CostFun.init()
-        self._Cost = CostFun
+        self._Functions['Cost'] = CostFun
+        
+        #Create IneqConst function (conditional)
+        if self._hasIneqConst:
+            IneqConstFun = MXFunction([self.V,self.EP],[struct_MX(IneqConst)])
+            IneqConstFun.init()
+            self._Functions['IneqConst'] = IneqConstFun
         
         #Create a local solver to generate the underlying QP
         Solver = _setSolver(self,self.V,Cost,g,self.EP)
@@ -370,10 +405,7 @@ class WindFarm:
 
         self.Nshooting            = Nshooting
         self.PowerSmoothingWeight = PowerSmoothingWeight
-        
-        
-
-        
+         
         #Carry over local stuff
         self.Nsimulation    = Nsimulation
         self._TurbineSolver = Turbine._Solver
@@ -381,6 +413,12 @@ class WindFarm:
         self._VTurbine      = Turbine.V
         self._Shoot         = Turbine.Shoot
         
+        #Do the wind turbines have inequality constraints ?
+        if hasattr(Turbine,'_TerminalConst') or hasattr(Turbine,'_StageConst'):
+            self._hasIneqConst = True
+        else:
+            self._hasIneqConst = False
+            
         # Container for the global decision variables
         V          =       struct_msym([
                                             entry('Turbine',   struct = Turbine.V,              repeat = Nturbine),
@@ -412,6 +450,7 @@ class WindFarm:
         TotPowerVar = []
         Cost = 0
         Const = []
+        IneqConst = []
         
         #Wind farm total power variation & total power constraints
         for k in range(Nshooting):
@@ -424,13 +463,18 @@ class WindFarm:
             
         Const.append(entry('PowerConst',    expr = TotPowerVar))
 
+        
         #Assemble local constraints & costs        
         for i in range(Nturbine):
-            [Const_i] = Turbine._Const.call([ V['Turbine',i], EP['Turbine',i]])    
-            [Cost_i]  = Turbine._Cost.call( [ V['Turbine',i], EP['Turbine',i]])
-            Const.append(entry('Turbine'+str(i), expr = Const_i))
-        
+            [     Cost_i] = Turbine._Functions[     'Cost'].call([ V['Turbine',i], EP['Turbine',i] ])
+            [ EquConst_i] = Turbine._Functions[ 'EquConst'].call([ V['Turbine',i], EP['Turbine',i] ])
+            
             Cost += Cost_i
+            Const.append(entry('Turbine'+str(i)+'_EquConst', expr = EquConst_i))
+            
+            if self._hasIneqConst:
+                [IneqConst_i] = Turbine._Functions['IneqConst'].call([ V['Turbine',i], EP['Turbine',i] ])
+                Const.append(entry('Turbine'+str(i)+'_IneqConst', expr = IneqConst_i))
             
         g = struct_MX(Const)
         self.g      = g
@@ -464,6 +508,9 @@ class WindFarm:
         
         self.Embedding(Wact, time)
         
+        print self.Solver['lbg'].cat
+        print self.Solver['ubg'].cat
+        
         self.Solver['solver'].setInput(self.init,                   'x0')
         self.Solver['solver'].setInput(self.Solver['lbg'],         "lbg")
         self.Solver['solver'].setInput(self.Solver['ubg'],         "ubg")
@@ -489,7 +536,7 @@ class WindFarm:
         for i in range(self.Nturbine):
             EP = self.EP['Turbine',i]
             V = Primal['Turbine',i]
-            mu = Adjoint['Turbine'+str(i)]
+            mu = Adjoint['Turbine'+str(i)+'_EquConst']
             
             solver['H'].setInput(V, 0)
             solver['H'].setInput(1.,1)
@@ -516,8 +563,8 @@ class WindFarm:
                         'g'  : DMatrix(solver[ 'g'].output()),
                         'lbX': DMatrix(self.lbV['Turbine',i] - V),
                         'ubX': DMatrix(self.ubV['Turbine',i] - V),
-                        'lbg': DMatrix(solver['lbg']),
-                        'ubg': DMatrix(solver['ubg'])
+                        'lbg': DMatrix(solver['lbg'] - solver['g'].output()),
+                        'ubg': DMatrix(solver['ubg'] - solver['g'].output())
                         })
             
         return QPs
@@ -567,8 +614,8 @@ class WindFarm:
             self._QPsolver.setInput( dgi,     'a')
             self._QPsolver.setInput( lbXi,    'lbx')
             self._QPsolver.setInput( ubXi,    'ubx')
-            self._QPsolver.setInput( lbgi-gi, 'lba')
-            self._QPsolver.setInput( ubgi-gi, 'uba')
+            self._QPsolver.setInput( lbgi,    'lba')
+            self._QPsolver.setInput( ubgi,    'uba')
     
             self._QPsolver.solve()
     
@@ -580,27 +627,28 @@ class WindFarm:
             
             MuBoundall.append(MuBound)
             
-            #Detect active/inactive bounds
-            #(AB reports the variables that are EITHER on the upper OR on the lower bound)
-            AB  = []
-            IAB = []
-            
+            #Detect active/inactive bounds            
             eps = 1e-8 #active constraint threshold
             
-            #Variable to monitor collpased bounds
+            #SHOULDN'T WE HAVE A DICTIONARY WITH THE CONSTRAINTS AND BOUNDS TREATED SIMILARLY HEREAFTER ?
+            
+            #Active bounds
+            AB  = []
             BoundsGap = np.abs(np.array(ubXi) - np.array(lbXi))
-            
-            lb_gap = np.array(lbXi) - X
-            ub_gap = X - np.array(ubXi)
+            lbV_gap = np.array(lbXi) - X
+            ubV_gap = X - np.array(ubXi)
             for ivar in range(X.shape[0]):
-                if (lb_gap[ivar] >= -abs(MuBound[ivar])) or (ub_gap[ivar] >= -abs(MuBound[ivar])) or (BoundsGap[ivar] < eps):
+                if (lbV_gap[ivar] >= -abs(MuBound[ivar])) or (ubV_gap[ivar] >= -abs(MuBound[ivar])) or (BoundsGap[ivar] < eps):
                     AB.append(ivar)
-                else:
-                    IAB.append(ivar)
 
-            #ABall.append(AB)
-            
-
+            #Active constraints
+            ABg = []
+            gGap = np.abs(np.array(lbgi) - np.array(ubgi))
+            lbg_gap = np.array(lbgi) - np.dot(dgi,X)
+            ubg_gap = np.dot(dgi,X) - np.array(ubgi)
+            for ivar in range(dgi.shape[0]):
+                if (lbg_gap[ivar] >= -abs(Mudg[ivar])) or (ubg_gap[ivar] >= -abs(Mudg[ivar])) or (gGap[ivar] < eps):
+                    ABg.append(ivar)
             
             #Construct dual homotopy (work on the AB)
             # sign(MuBound)*(MuBound + dMu) >= 0 hence  -sign(MuBound)*dMu =<  |MuBound|
@@ -624,24 +672,24 @@ class WindFarm:
             #       lbXi <= X + dX <= ubXi
             # i.e.  lbXi - X <= dX <= ubXi - X
             # or
-            # 1. dX <= -ub_gap and 2. -dX <= -lb_gap  constructed seperately 
+            # 1. dX <= -ubV_gap and 2. -dX <= -lbV_gap  constructed seperately 
             #
             # i.e. check
             #
-            # [ I] * dX <= -[ub_gap]
-            # [-I]          [lb_gap]
+            # [ I] * dX <= -[ubV_gap]
+            # [-I]          [lbV_gap]
         
             HomotopyPrimalMAT = np.concatenate([np.eye(X.shape[0]),-np.eye(X.shape[0])],axis=0) 
             RHSub = []
             RHSlb = []
             for ivar in range(X.shape[0]): 
-                if (BoundsGap[ivar] > eps) and (ub_gap[ivar] < -abs(MuBound[ivar])):
-                    RHSub.append(-ub_gap[ivar]) #Check only inactive bounds
+                if (BoundsGap[ivar] > eps) and (ubV_gap[ivar] < -abs(MuBound[ivar])):
+                    RHSub.append(-ubV_gap[ivar]) #Check only inactive bounds
                 else:
                     RHSub.append(inf) #Do not check primal variables blocked by collapsed constraints
 
-                if (BoundsGap[ivar] > eps) and (lb_gap[ivar] < -abs(MuBound[ivar])):
-                    RHSlb.append(-lb_gap[ivar]) #Check only inactive bounds
+                if (BoundsGap[ivar] > eps) and (lbV_gap[ivar] < -abs(MuBound[ivar])):
+                    RHSlb.append(-lbV_gap[ivar]) #Check only inactive bounds
                 else:
                     RHSlb.append(inf) #Do not check primal variables blocked by collapsed constraints
             
@@ -659,7 +707,7 @@ class WindFarm:
             block = np.zeros([len(AB),X.shape[0]])
             for line, col in enumerate(AB):
                 block[line,col] = 1.
-            gActive = np.concatenate([block,QPs[i]['dg']],axis = 0)
+            gActive = np.concatenate([block,QPs[i]['dg'][ABg,:]],axis = 0)
             
             # KKT Matrix
             KKTMat = np.concatenate([QPs[i]['H'],gActive],axis = 0)
@@ -709,7 +757,7 @@ class WindFarm:
             
             Xall.append(V(X))
     
-            AdjointUpdate['Turbine'+str(i)] = np.array(self._QPsolver.output('lam_a'))
+            AdjointUpdate['Turbine'+str(i)+'_EquConst'] = np.array(self._QPsolver.output('lam_a'))
         return Xall, AdjointUpdate, DualHess, dPrimal, dAdjoint, Homotopy, Status
 
     def DistributedSQP(self, Primal, Adjoint,Dual, Wact, time = 0, iter_SQP = 1,iter_Dual = 1, FullDualStep = True, ReUpdate = False):
@@ -790,7 +838,7 @@ class WindFarm:
             if (ReUpdate == True):
                 for i in range(self.Nturbine):
                     StepLocal[i] = self._VTurbine(StepLocal[i].cat + np.dot(dPrimal[i],-tstep*StepDual))
-                    Adjoint['Turbine'+str(i)] += np.dot(dAdjoint[i],-tstep*StepDual)
+                    Adjoint['Turbine'+str(i)+'_EquConst'] += np.dot(dAdjoint[i],-tstep*StepDual)
                 
                 Stepz = self.EP['PowerVarRef',veccat]-Primal['PowerVar',veccat] - Dual/float(self.PowerSmoothingWeight)
                 
