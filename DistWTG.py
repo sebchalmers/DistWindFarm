@@ -582,8 +582,7 @@ class WindFarm:
             
         Xall = []
         AdjointUpdate  = self.g()
-        MuBoundall     = []
-        ABextra_all    = []
+
         dPrimal        = []
         dAdjoint       = []
         dMuBound       = []
@@ -626,15 +625,41 @@ class WindFarm:
             #Status['QPsolver'].append(self._QPsolver.getStat('return_status'))
             
             X        = np.array(self._QPsolver.output('x'))
-            Mudg     = np.array(self._QPsolver.output('lam_a'))
-            MuBound  = self._QPsolver.output('lam_x')
+            Mug      = list(self._QPsolver.output('lam_a'))
+            MuBound  = list(self._QPsolver.output('lam_x'))
             
-            MuBoundall.append(MuBound)
+
             
             #Detect active/inactive bounds            
             eps = 1e-8 #active constraint threshold
             
-            #SHOULDN'T WE HAVE A DICTIONARY WITH THE CONSTRAINTS AND BOUNDS TREATED SIMILARLY HEREAFTER ?
+            ###############################################
+            # Constraints, generic form:
+            #
+            # [lbV] <= [ I] * X <= [ubV]
+            # [lbg]    [dg]        [ubg]
+            #
+            #  lb   <= A*X  <= ub
+            #
+            # Mu are the associated multipliers
+            #
+            
+            lb = np.concatenate([np.array(lbXi),np.array(lbgi)])
+            ub = np.concatenate([np.array(ubXi),np.array(ubgi)])
+            A  = np.concatenate([np.eye(X.shape[0]),np.array(dgi)])
+            Mu = MuBound+Mug
+            
+            
+            #Construct Active Set
+            AS = []
+            BoundsGap = np.abs(ub - lb)
+            lb_gap = lb - np.dot(A,X)
+            ub_gap = np.dot(A,X) - ub
+            for line in range(A.shape[0]):
+                if (lb_gap[line] >= -abs(Mu[line])) or (ub_gap[line] >= -abs(Mu[line])) or (BoundsGap[line] < eps):
+                    AS.append(line)
+                    
+            ###############################################
             
             #Active bounds
             AB  = []
@@ -651,7 +676,7 @@ class WindFarm:
             lbg_gap = np.array(lbgi) - np.dot(dgi,X)
             ubg_gap = np.dot(dgi,X) - np.array(ubgi)
             for ivar in range(dgi.shape[0]):
-                if (lbg_gap[ivar] >= -abs(Mudg[ivar])) or (ubg_gap[ivar] >= -abs(Mudg[ivar])) or (gGap[ivar] < eps):
+                if (lbg_gap[ivar] >= -abs(Mug[ivar])) or (ubg_gap[ivar] >= -abs(Mug[ivar])) or (gGap[ivar] < eps):
                     ABg.append(ivar)
             
             #Construct dual homotopy (work on the AB)
@@ -659,15 +684,13 @@ class WindFarm:
             
             HomotopyDualMAT = []
             HomotopyDualRHS = []
-            ABextra = []
             for m, ivar in enumerate(AB):
                 HomotopyDualMAT.append(np.sign(MuBound[ivar]))
                 if (BoundsGap[ivar] > eps):
-                    ABextra.append(AB[m])
                     HomotopyDualRHS.append(abs(MuBound[ivar]))
                 else:
                     HomotopyDualRHS.append(inf) #Do not check a multiplier associated to a collpased constraint
-            ABextra_all.append(ABextra)
+
                        
             HomotopyDualMAT = np.diag(HomotopyDualMAT)
             HomotopyDualRHS = np.array(HomotopyDualRHS).reshape(len(HomotopyDualRHS),1)
@@ -734,7 +757,7 @@ class WindFarm:
             #The "dPrimalAdjoint" provides:
             #[d X       ]
             #[d MuBound ] = dPrimalAdjoint * d Dual
-            #[d Mudg    ]
+            #[d Mug    ]
             
             # Homotopy must check:
             #
