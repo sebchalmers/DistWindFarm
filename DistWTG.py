@@ -653,6 +653,7 @@ class WindFarm:
             
             #Construct Active Set
             AS = []
+            AB = []
             BoundsGap = np.abs(ub - lb)
             lb_gap = lb - np.dot(A,X)
             ub_gap = np.dot(A,X) - ub
@@ -660,16 +661,19 @@ class WindFarm:
                 if (lb_gap[line] >= -abs(Mu[line])) or (ub_gap[line] >= -abs(Mu[line])) or (BoundsGap[line] < eps):
                     AS.append(line)
                     
+                    if (line < X.shape[0]):
+                        AB.append(line)
+                    
             ###############################################
             
-            #Active bounds
-            AB  = []
-            BoundsGapV = np.abs(np.array(ubXi) - np.array(lbXi))
-            lbV_gap = np.array(lbXi) - X
-            ubV_gap = X - np.array(ubXi)
-            for ivar in range(X.shape[0]):
-                if (lbV_gap[ivar] >= -abs(MuBound[ivar])) or (ubV_gap[ivar] >= -abs(MuBound[ivar])) or (BoundsGapV[ivar] < eps):
-                    AB.append(ivar)
+            #Active bounds # That shall not be needed...
+            #AB  = []
+            #BoundsGapV = np.abs(np.array(ubXi) - np.array(lbXi))
+            #lbV_gap = np.array(lbXi) - X
+            #ubV_gap = X - np.array(ubXi)
+            #for ivar in range(X.shape[0]):
+            #    if (lbV_gap[ivar] >= -abs(MuBound[ivar])) or (ubV_gap[ivar] >= -abs(MuBound[ivar])) or (BoundsGapV[ivar] < eps):
+            #        AB.append(ivar)
 
            
             #Construct dual homotopy (work on the AS)
