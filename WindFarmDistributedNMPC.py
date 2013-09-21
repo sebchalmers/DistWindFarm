@@ -25,6 +25,8 @@ Nturbine = 4
 Nshooting = 50
 Nsimulation = 250
 
+
+
 ScaleT = 1e-4
 
 N = 97. 
@@ -123,7 +125,7 @@ plt.show()
 raw_input()
 plt.close()
 
-T = Turbine(Inputs = ['dbeta', 'Tg'], States = ['Og', 'beta'])#, Slacks = ['sOg'])
+T = Turbine(Inputs = ['dbeta', 'Tg'], States = ['Og', 'beta'], Slacks = ['sOg'])
 
 
 #Cp interpolation
@@ -162,10 +164,10 @@ Cost  = (T.Inputs['Tg'] - T.InputsPrev['Tg'])**2#(1e-2*T.PowerVar/(0.5*rho*A)/Sc
 Cost += T.Inputs['dbeta']**2                                    # Pitch rate
 Cost += -Cp*T.Wind**3                                           # Power capture
 
-#Cost += T.Slacks['sOg']
+Cost += T.Slacks['sOg']**2 + 0.1*T.Slacks['sOg']
 
 CostTerminal = -Cp*T.Wind**3
-#CostTerminal += T.Slacks['sOg']
+CostTerminal += T.Slacks['sOg']**2 + 0.1*T.Slacks['sOg']
 
 Cost         *= ScaleLocalCost
 CostTerminal *= ScaleLocalCost
@@ -179,12 +181,12 @@ CostTerminal *= ScaleLocalCost
 #            ]
 
 IneqConst = [
-                        Ogmin  - T.States['Og'],# - T.Slacks['sOg'], # <= 0 
-                       -Ogmax  + T.States['Og'] #- T.Slacks['sOg']  # <= 0 
+                        Ogmin  - T.States['Og'] - T.Slacks['sOg'], # , # <= 0 
+                       -Ogmax  + T.States['Og'] - T.Slacks['sOg']  # <= 0  - T.Slacks['sOg']
             ]
 
-#T.setIneqConst(IneqConst)
-#T.setIneqConst(IneqConst, Terminal = True)
+T.setIneqConst(IneqConst)
+T.setIneqConst(IneqConst, Terminal = True)
 
 #Define Electrical Power
 T.ElecPower(T.Inputs['Tg']*T.States['Og'])
@@ -210,8 +212,8 @@ Power0 = Tg0*Og0*ScaleT
 F.init['Turbine',:,'States',:,'Og']   =  Og0
 F.init['Turbine',:,'States',:,'beta'] =  BetaOpt
 
-F.lbV['Turbine',:,'States',:,'Og']    =  Ogmin
-F.ubV['Turbine',:,'States',:,'Og']    =  Ogmax
+#F.lbV['Turbine',:,'States',:,'Og']    =  Ogmin
+#F.ubV['Turbine',:,'States',:,'Og']    =  Ogmax
 
 F.lbV['Turbine',:,'States',:,'beta']  =  betamin
 F.ubV['Turbine',:,'States',:,'beta']  =  betamax
@@ -300,28 +302,38 @@ StepSizeLog  = []
 StatusLog    = []
 for k in range(Nsimulation):
 
-                       #Central Solution
+                       ##Central Solution
                        #PrimalCentral, AdjointsCentral = F.Solve(WProfiles, time = k)
-                       #F.init = PrimalCentral
-                       
+                       #F.PlotBasic(T, PrimalCentral, time, 'k', LW = 2)
+                       ##F.init = PrimalCentral
+                       #
                        # SQP Step
-                       PrimalDistributed, AdjointsDistributed, Dual, Residual, StepSize, Status = F.DistributedSQP(PrimalDistributed, AdjointsDistributed, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1, FullDualStep = False, ReUpdate = True)
+                       PrimalDistributed, AdjointsDistributed, Dual, Residual, StepSize, Status = F.DistributedSQP(PrimalDistributed, AdjointsDistributed, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1, FullDualStep = True)
                        ResidualLog.append(float(np.sqrt(np.dot(Residual.T,Residual))))
                        StepSizeLog.append(StepSize)
                        StatusLog.append(Status)
-                       
-                       ##Plot
-                       #plt.close('all')
-                       #F.PlotBasic(T, PrimalDistributed,     time, 'r')
                        #raw_input()
-                       #if (ResidualLog[-1] > 10):
-                       #                       F.PlotBasic(T, PrimalDistributed, time, 'r')
-                       #                       assert(0==1)
-                       #
-                       #
-                       #raw_input()
+                       #F.PlotBasic(T, PrimalDistributed, time, 'r')
                        
+                       print "Step: ", k
+                       #raw_input()
+                       #key = 'Og'
+                       #col = 'r'
+                       #for i in range(F.Nturbine):
+                       #           plt.figure(200)
+                       #           plt.subplot(F.Nturbine,1,i)
+                       #           plt.hold('on')
+                       #           plt.plot(time['Inputs'],    PrimalDistributed['Turbine',i,'States',:-1,key],color=col)
+                       #           if (key == 'Og'):
+                       #               plt.axhline(y=Ogmax, xmin=0, xmax=time['Inputs'][-1],color = 'k')
                        #
+                       #plt.title('State '+key)
+                       #
+                       plt.close('all')
+                       #F.PlotBasic(T, PrimalDistributed, time, 'r')
+                       #raw_input()
+
+               
                        
                        #Check
                        #errorDist = PrimalCentral.cat - PrimalDistributed.cat
