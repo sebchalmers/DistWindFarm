@@ -61,7 +61,6 @@ def _setSolver(self, V,Cost,g,P):
         key_list = ['Turbine'+str(i)+'_IneqConst' for i in range(self.Nturbine)]
         for key in g.keys():
             if (key in key_list):
-                print key
                 lbg[key] = -inf
                 ubg[key] =  0
                 
@@ -75,7 +74,7 @@ def _setSolver(self, V,Cost,g,P):
     #solver.setOption("print_level",1)  
     solver.setOption("hessian_approximation","exact")
     solver.setOption("max_iter",2000)
-    solver.setOption("tol",1e-9)
+    solver.setOption("tol",1e-12)
     solver.setOption("linear_solver","ma27")
     
     solver.init()
@@ -214,12 +213,13 @@ class Turbine:
                 
         if    (Terminal == False):
             self._StageConst    = self._BuildFunc(veccat(Const), Terminal)
-            self._StartConst    = Start
+            self._StartStageConst = Start
         elif  (Terminal == True): 
             self._TerminalConst = self._BuildFunc(veccat(Const), Terminal)        
                 
         
     def setCost(self, Expr, Terminal = False):
+        
         if (self._frozen == True):
             print "Wind farm already created, call ignored"
             return
@@ -328,11 +328,11 @@ class Turbine:
             [StageCost]  = self._StageCost.call(InputList)
             Cost += StageCost
         
-            #Stage Inequality constraints NOT IMPOSE AT INITIAL CONDITIONS !!
-            if hasattr(self,'_StageConst') and (k > self._StartConst):
+            #Stage Inequality constraints
+            if hasattr(self,'_StageConst') and (k > self._StartStageConst):
                 [StageConst] = self._StageConst.call(InputList)
                 IneqConst.append(StageConst)
-                print StageConst
+
         #Terminal stuff
         k = Nshooting
         InputList = [
@@ -491,7 +491,6 @@ class WindFarm:
             Const.append(entry('Turbine'+str(i)+'_EquConst', expr = EquConst_i))
             
             if self._hasIneqConst:
-                print "Ineq"
                 [IneqConst_i] = Turbine._Functions['IneqConst'].call([ V['Turbine',i], EP['Turbine',i] ])
                 Const.append(entry('Turbine'+str(i)+'_IneqConst', expr = IneqConst_i))
             
@@ -606,12 +605,15 @@ class WindFarm:
         dMuBound       = []
         dMu            = []
         
-        Homotopy = {'Primal':{'Matrices': [], 'RHS':[]}, 'Adjoint':{'Matrices': [], 'RHS':[]}}
+        Homotopy = {'Primal':{'Matrices': [], 'RHS':[]}, 'Dual':{'Matrices': [], 'RHS':[]}}
         
         Status = {'QPsolver' : [], 'Factorization': []}
-        DualHess = -np.eye(self.Nshooting)/self.PowerSmoothingWeight
-        
-        
+        if (self.PowerSmoothingWeight > 0):
+            DualHess = -np.eye(self.Nshooting)/self.PowerSmoothingWeight
+        else:
+            #To allow simulations with no smoothing
+            DualHess = -np.eye(self.Nshooting)
+            
         for i in range(self.Nturbine):
             Hi   = DMatrix(QPs[i]['H'])
             fi   = DMatrix(QPs[i]['f'])
@@ -645,82 +647,68 @@ class WindFarm:
     
             #Status['QPsolver'].append(self._QPsolver.getStat('return_status'))
             
-            X        = np.array( self._QPsolver.output(    'x') )
-            Mug      =     list( self._QPsolver.output('lam_a') )
-            MuBound  =     list( self._QPsolver.output('lam_x') )
-             
+            X        = np.array(self._QPsolver.output('x'))
+            Mug      = list(self._QPsolver.output('lam_a'))
+            MuBound  = list(self._QPsolver.output('lam_x'))
+            
+
+            
             #Detect active/inactive bounds            
             eps = 1e-2 #active constraint threshold
             
             ###############################################
             # Constraints, generic form:
             #
-            # [lbXi] <= [ I ] * X <= [ubXi]
-            # [lbgi]    [dgi]        [ubgi]
+            # [lbV] <= [ I] * X <= [ubV]
+            # [lbg]    [dg]        [ubg]
             #
-            #   lb   <=   A   * X <=   ub
+            #  lb   <= A*X  <= ub
             #
             # Mu are the associated multipliers
             # A has as many lines as there are Mu:s
             
-            lb = np.concatenate([     np.array(lbXi), np.array(lbgi) ])
-            ub = np.concatenate([     np.array(ubXi), np.array(ubgi) ])
-            A  = np.concatenate([ np.eye(X.shape[0]), np.array( dgi) ])
+            lb = np.concatenate([np.array(lbXi),np.array(lbgi)])
+            ub = np.concatenate([np.array(ubXi),np.array(ubgi)])
+            A  = np.concatenate([np.eye(X.shape[0]),np.array(dgi)])
             Mu = MuBound+Mug
+            
             
             #Construct Active Set, Active bounds and Active Constraints
             AS = []
+            AB = []
+            Ag = []
             BoundsGap = np.abs(ub - lb)
             lb_gap = lb - np.dot(A,X)
             ub_gap = np.dot(A,X) - ub
             for line in range(A.shape[0]):
                 if (lb_gap[line] >= -eps) or (ub_gap[line] >= -eps) or (BoundsGap[line] < eps):
                     AS.append(line)                    
- 
- 
-
-            #print "Active Set"
-            #for index in AS:
-            #    if (index < self._VTurbine.shape[0]):
-            #        print "Bounded variables :", self._VTurbine.getLabel(index)
-            #    else:
-            #        print "Active g: ", self._gLocal.getLabel(index-self._VTurbine.shape[0])
-            #
-            
-            #yAS = [0. for index in range(len(AS))]
-            #
-            #plt.figure(1000)
-            #plt.subplot(4,1,i)
-            #plt.hold('on')
-            #plt.plot(AS,yAS,color='k',linestyle = 'none', marker = 'o')
-            #plt.plot(ub_gap,color='k',linestyle = 'none', marker = 'x')
-            ##plt.plot(lb_gap,color='b',linestyle = 'none', marker = 'x')
-            #plt.axhline(y=-eps, xmin=0, xmax=ub_gap.shape[0],color='r')
-            ##plt.ylim([-100*eps,100*eps])
-            #plt.xlim([0,ub_gap.shape[0] ])
-            #plt.title('Turbine'+str(i)+', g: BLACK > RED => ACTIVE')
-            #plt.legend()
-            
-            
+                    if (line < X.shape[0]):
+                        AB.append(line)
+                    else:
+                        Ag.append(line-X.shape[0])    
+                        #print Mug[i], lbgi[i], gi[i], ubgi[i]
 
             ###############################################
            
             #Construct dual homotopy (work on the AS)
             # sign(MuBound)*(MuBound + dMu) >= 0 hence  -sign(MuBound)*dMu =<  |MuBound|
             
-            #HomotopyDualMAT = []
-            #HomotopyDualRHS = []
-            #for m, ivar in enumerate(AS):
-            #    HomotopyDualMAT.append(np.sign(Mu[ivar])) #SIGN IS WRONG... DUNNO WHY
-            #    if (BoundsGap[ivar] > eps):
-            #        HomotopyDualRHS.append(abs(Mu[ivar]))
-            #    else:
-            #        HomotopyDualRHS.append(inf) #Do not check a multiplier associated to a collpased constraint
-            #
-            #           
-            #HomotopyDualMAT = np.diag(HomotopyDualMAT)
-            #HomotopyDualRHS = np.array(HomotopyDualRHS).reshape(len(HomotopyDualRHS),1)
-            #    
+            HomotopyDualMAT = []
+            HomotopyDualRHS = []
+            for m, ivar in enumerate(AS):
+                HomotopyDualMAT.append(np.sign(Mu[ivar])) #SIGN IS WRONG... DUNNO WHY
+                if (BoundsGap[ivar] > eps) and (abs(Mu[ivar]) > eps):
+                    HomotopyDualRHS.append(abs(Mu[ivar]))
+                else:
+                    # Do not check a multiplier associated to a collpased constraint
+                    # or negligible multipliers
+                    HomotopyDualRHS.append(inf) 
+
+                       
+            HomotopyDualMAT = np.diag(HomotopyDualMAT)
+            HomotopyDualRHS = np.array(HomotopyDualRHS).reshape(len(HomotopyDualRHS),1)
+                
             #Construct primal homotopy 
             #       lb <= A*(X + dX) <= ubXi
             # i.e.  lb - A*X <= A*dX <= ubXi - A*X
@@ -732,23 +720,23 @@ class WindFarm:
             # [ A] * dX <= -[ub_gap]
             # [-A]          [lb_gap]
         
-            #HomotopyPrimalMAT = np.concatenate([A,-A],axis=0) 
-            #RHSub = []
-            #RHSlb = []
-            #for ivar in range(A.shape[0]): 
-            #    if (BoundsGap[ivar] > eps) and (ub_gap[ivar] < -abs(Mu[ivar])):
-            #        RHSub.append(-ub_gap[ivar]) #Check only inactive bounds
-            #    else:
-            #        RHSub.append(inf) #Do not check primal variables blocked by collapsed constraints
-            #
-            #    if (BoundsGap[ivar] > eps) and (lb_gap[ivar] < -abs(Mu[ivar])):
-            #        RHSlb.append(-lb_gap[ivar]) #Check only inactive bounds
-            #    else:
-            #        RHSlb.append(inf) #Do not check primal variables blocked by collapsed constraints
-            #
-            #HomotopyPrimalRHS = np.concatenate([RHSub,RHSlb],axis = 0)
-            #HomotopyPrimalRHS = HomotopyPrimalRHS.reshape(HomotopyPrimalRHS.shape[0],1)
-            #
+            HomotopyPrimalMAT = np.concatenate([A,-A],axis=0) 
+            RHSub = []
+            RHSlb = []
+            for ivar in range(A.shape[0]): 
+                if (BoundsGap[ivar] > eps) and (ub_gap[ivar] < -eps):
+                    RHSub.append(-ub_gap[ivar]) #Check only inactive bounds
+                else:
+                    RHSub.append(inf) #Do not check primal variables blocked by collapsed constraints
+
+                if (BoundsGap[ivar] > eps) and (lb_gap[ivar] < -eps):
+                    RHSlb.append(-lb_gap[ivar]) #Check only inactive bounds
+                else:
+                    RHSlb.append(inf) #Do not check primal variables blocked by collapsed constraints
+            
+            HomotopyPrimalRHS = np.concatenate([RHSub,RHSlb],axis = 0)
+            HomotopyPrimalRHS = HomotopyPrimalRHS.reshape(HomotopyPrimalRHS.shape[0],1)
+            
             #The homotopy must check:
             # HomotopyPrimalMAT * dX       <= HomotopyPrimalRHS
             # HomotopyDualMAT   * dMuBound <= HomotopyDualRHS
@@ -773,27 +761,8 @@ class WindFarm:
             except: #In case of a badly identified Active Set
                 Status['Factorization'].append('RankDefficienty, Turbine'+str(i))
                 dPrimalAdjoint, _, _, _ = linalg.lstsq(KKT,b)
-                print "Bad conditioning"
-                
-                yAS = [0. for index in range(len(AS))]
-                
-                plt.figure(1000)
-                plt.subplot(4,1,i)
-                plt.hold('on')
-                plt.plot(AS,yAS,color='k',linestyle = 'none', marker = 'o')
-                plt.plot(ub_gap,color='k',linestyle = 'none', marker = 'x')
-                #plt.plot(lb_gap,color='b',linestyle = 'none', marker = 'x')
-                plt.axhline(y=-eps, xmin=0, xmax=ub_gap.shape[0],color='r')
-                #plt.ylim([-100*eps,100*eps])
-                plt.xlim([0,ub_gap.shape[0] ])
-                plt.title('Turbine'+str(i)+', g: BLACK > RED => ACTIVE')
-                plt.legend()
-            
-                
-                
+                print "Singular KKT matrix"
                 raw_input()
-                
-                
                 
             #The "dPrimalAdjoint" provides:
             #[d X       ]
@@ -812,36 +781,35 @@ class WindFarm:
             #
             
 
-            #Primal / Adjoint (bounds and constraints)
-            dPrimal.append(  dPrimalAdjoint[ :X.shape[0] ,:] )
-            #dMu.append(      dPrimalAdjoint[ X.shape[0]: ,:] )
             
-            #Adjoint sensitivity for 2nd update (Adjoint of g only)
-            #dAdjoint_i = np.zeros([self._gLocal.shape[0],self.Nshooting])
-            #for index, adjindex in enumerate(Ag):
-            #    dAdjoint_i[adjindex,:] = dPrimalAdjoint[X.shape[0]+len(AB)+index,:]
-            #dAdjoint.append(dAdjoint_i)
+            dPrimal.append(dPrimalAdjoint[:X.shape[0],:])
+            dAdjoint_i = np.zeros([self._gLocal.shape[0],self.Nshooting])
+            for index, adjindex in enumerate(Ag):
+                dAdjoint_i[adjindex,:] = dPrimalAdjoint[X.shape[0]+len(AB)+index,:]
+            dAdjoint.append(dAdjoint_i)
             
-             
-            #Homotopy[ 'Primal']['Matrices'].append(np.dot(HomotopyPrimalMAT,dPrimal[-1]))
-            #Homotopy[ 'Primal'][     'RHS'].append(HomotopyPrimalRHS)
-            #
-            #Homotopy['Adjoint']['Matrices'].append(np.dot(HomotopyDualMAT  ,dMu[-1]    ))
-            #Homotopy['Adjoint'][     'RHS'].append(  HomotopyDualRHS)
+            #dAdjoint SHOULD NOT NEED TO EXIST...
+            
+            dMu.append(dPrimalAdjoint[X.shape[0]:,:])
+            
+            Homotopy['Primal']['Matrices'].append(np.dot(HomotopyPrimalMAT,dPrimal[-1]))
+            Homotopy['Primal'][     'RHS'].append(HomotopyPrimalRHS)
+            
+            Homotopy[  'Dual']['Matrices'].append(np.dot(HomotopyDualMAT,dMu[-1]))
+            Homotopy[  'Dual'][     'RHS'].append(HomotopyDualRHS)
             
             DualHess -= dPrimalAdjoint[IndexDual]
             
             Xall.append(V(X))
     
-            #AdjointQP = self._gLocal(self._QPsolver.output('lam_a'))
+            AdjointQP = self._gLocal(self._QPsolver.output('lam_a'))
     
-            #for key in AdjointQP.keys():
-            #    AdjointUpdate['Turbine'+str(i)+'_'+key] = AdjointQP[key]
-
-            
+            for key in AdjointQP.keys():
+                AdjointUpdate['Turbine'+str(i)+'_'+key] = AdjointQP[key]
+                
         return Xall, AdjointUpdate, DualHess, dPrimal, dAdjoint, Homotopy, Status
 
-    def DistributedSQP(self, Primal, Adjoint,Dual, Wact, time = 0, iter_SQP = 1,iter_Dual = 1, FullDualStep = False, ReUpdate = True):
+    def DistributedSQP(self, Primal, Adjoint,Dual, Wact, time = 0, iter_SQP = 1,iter_Dual = 1, FullDualStep = True, ReUpdate = True):
         
         self.Embedding(Wact, time)
         
@@ -871,50 +839,51 @@ class WindFarm:
                 #u, s, vh = linalg.svd(DualHess)
                 #CondHess.append(s[0]/s[-1])
                 
-                #z step
-                Stepz = self.EP['PowerVarRef',veccat]-Primal['PowerVar',veccat] - Dual/float(self.PowerSmoothingWeight)
+                if (self.PowerSmoothingWeight > 0):
+                    #z step
+                    Stepz = self.EP['PowerVarRef',veccat]-Primal['PowerVar',veccat] - Dual/float(self.PowerSmoothingWeight)
                 
-                #Constraints residual
-                Residual = Primal['PowerVar',veccat] + Stepz
-                for i in range(self.Nturbine):
-                    Residual -= Primal['Turbine',i,'PowerVar',veccat] + StepLocal[i]['PowerVar',veccat]
+                    #Constraints residual
+                    Residual = Primal['PowerVar',veccat] + Stepz
+                    for i in range(self.Nturbine):
+                        Residual -= Primal['Turbine',i,'PowerVar',veccat] + StepLocal[i]['PowerVar',veccat]
                     
-                #Dual full step
-                StepDual = linalg.solve(DualHess,Residual)
-                                        
+                    #Dual full step
+                
+                    StepDual = linalg.solve(DualHess,Residual)
+                else:
+                    #Allows for simulating a standard wind farm
+                    StepDual = 0*Dual
+                    Stepz    = 0*Primal['PowerVar',veccat]
+                    
                 NormStepDual = np.sqrt(mul(StepDual.T,StepDual))
-                NormResidual = sqrt(mul(Residual.T,Residual))
+
                 
-                #################### DUAL STEP SIZE ####################
-                #
-                #if (FullDualStep == False):
-                #    tmax = {'Primal':1.,'Adjoint':1.}
-                #    eps = 1e-10
-                #    for key in tmax.keys():
-                #        for i in range(self.Nturbine):
-                #            a = np.dot(Homotopy[key]['Matrices'][i],StepDual)
-                #            b = Homotopy[key]['RHS'][i]
-                #            for index in range(a.shape[0]):
-                #                if (a[index] > eps) and (a[index]-b[index] > eps) and (b[index] > 1e-1):
-                #                    tmaxnew = float(b[index]/a[index])
-                #                    if (tmaxnew < tmax[key]):
-                #                        tmax[key] = tmaxnew
-                #    
-                #    tstep = np.min([1.,tmax['Primal'],tmax['Adjoint']])
-                #else:
-                #    tstep = 1.
-                #
-                ########################################################
+                ################### DUAL STEP SIZE ####################
                 
-                tstep = 1.
-        
-                headerstr = "Iter \t Dual Residual \t Dual step-size \t  Dual full step norm \t Local Residuals"
-                print headerstr
-                print "%3d \t %.5E \t %.5E \t %.5E \t %.5E" %  (iter_dual, NormResidual,  tstep,  NormStepDual, LocalResidual)
+                if (FullDualStep == False):
+                    tmax = {'Primal':1.,'Dual':1.}
+                    eps = 1e-2
+                    for key in tmax.keys():
+                        for i in range(self.Nturbine):
+                            a = np.dot(Homotopy[key]['Matrices'][i],StepDual)
+                            b = Homotopy[key]['RHS'][i]
+                            for index in range(a.shape[0]):
+                                if (a[index] > eps) and (a[index]-b[index] > eps) and (b[index] > eps):
+                                    tmaxnew = float(b[index]/a[index])
+                                    if (tmaxnew < tmax[key]):
+                                        tmax[key] = tmaxnew
+                    
+                    tstep = np.min([1.,tmax['Primal'],tmax['Dual']])
+                else:
+                    tstep = 1.
                 
+                #######################################################
+                
+
                 Dual -= tstep*StepDual
                           
-                Norm_Dual.append(NormResidual)
+
                 
             ################### SECOND UPDATE ####################
                 
@@ -922,11 +891,15 @@ class WindFarm:
                 for i in range(self.Nturbine):
                     StepLocal[i] = self._VTurbine(StepLocal[i].cat + np.dot(dPrimal[i],-tstep*StepDual))
                     
-                    #AdjointUpdate = self._gLocal(np.dot(dAdjoint[i],-tstep*StepDual))
-                    #for key in AdjointUpdate.keys():
-                    #    Adjoint['Turbine'+str(i)+'_'+key] += AdjointUpdate[key]
+                    AdjointUpdate = self._gLocal()
+                    #print AdjointUpdate.shape
+                    #print np.dot(dAdjoint[i],-tstep*StepDual).shape
+                    #raw_input()
+                    for key in AdjointUpdate.keys():
+                        Adjoint['Turbine'+str(i)+'_'+key] = AdjointUpdate[key]
                 
-                #Stepz = self.EP['PowerVarRef',veccat]-Primal['PowerVar',veccat] - Dual/float(self.PowerSmoothingWeight)
+                if (self.PowerSmoothingWeight > 0):
+                    Stepz = self.EP['PowerVarRef',veccat]-Primal['PowerVar',veccat] - Dual/float(self.PowerSmoothingWeight)
                 
             #######################################################
                 
@@ -950,9 +923,9 @@ class WindFarm:
                 for key in StepLocal[i].keys():
                     Primal['Turbine',i,key,veccat] += StepLocal[i][key,veccat]
                     
-                    ##Project in the bounds 
-                    #Primal['Turbine',i,key,veccat] = min(max(Primal['Turbine',i,key,veccat],self.lbV['Turbine',i,key,veccat]),self.ubV['Turbine',i,key,veccat])
-                    
+                    #Project in the bounds 
+                    Primal['Turbine',i,key,veccat] = min(max(Primal['Turbine',i,key,veccat],self.lbV['Turbine',i,key,veccat]),self.ubV['Turbine',i,key,veccat])
+            
             #Pass on Dual variables (not needed, but for consistency)
             Adjoint['PowerConst',veccat] = Dual
             
@@ -961,7 +934,18 @@ class WindFarm:
             for i in range(self.Nturbine):
                 ResidualOut -= Primal['Turbine',i,'PowerVar',veccat]
             
-                       
+            NormResidual = sqrt(mul(ResidualOut.T,ResidualOut))
+            Norm_Dual.append(NormResidual)
+            
+            #Verbose
+
+            print "Iter \t Dual Residual \t Dual step-size \t  Dual full step norm \t Local Residuals"
+            print "%3d  \t %.5E \t %.5E  \t %.5E  \t %.5E" %  (iter_dual, NormResidual,  tstep,  NormStepDual, LocalResidual)
+                                    	 
+            if (tstep < 1.):
+                raw_input()
+
+            
         return Primal, Adjoint, Dual, ResidualOut, tstep, StatusLog
     
     ############ Simulation ########
@@ -1035,7 +1019,7 @@ class WindFarm:
                 plt.title('Step'+key)   
                 counter += 1
     
-    def PlotBasic(self, T, Primal, time, col, LW = 1):
+    def PlotBasic(self, T, Primal, time, LW = 1, style = '-', col = 'k'):
         
         Ogmax = 2*pi*1173.7/60
                
@@ -1044,16 +1028,15 @@ class WindFarm:
         for i in range(self.Nturbine):
             PowerVar += np.array(Primal['Turbine',i,'PowerVar'])
             plt.hold('on')
-            plt.plot(time['Inputs'],Primal['Turbine',i,'PowerVar'],color=col,linestyle = ':')
-
-        plt.plot(time['Inputs'],    PowerVar,color=col,linewidth = 2)
+            #plt.plot(time['Inputs'],Primal['Turbine',i,'PowerVar'],color=col, linestyle = style,linewidth = LW)
+        plt.plot(time['Inputs'],    PowerVar,color=col, linewidth = 2, linestyle = style)
         
         for fig, key in enumerate(T.Inputs.keys()):
             for i in range(self.Nturbine):
                 plt.figure(100+fig)
                 plt.subplot(self.Nturbine,1,i)
                 plt.hold('on')
-                plt.step(time['Inputs'],    Primal['Turbine',i,'Inputs',:,key],color=col,linewidth = LW)
+                plt.step(time['Inputs'],    Primal['Turbine',i,'Inputs',:,key],color=col,linewidth = LW, linestyle = style)
             plt.title('Input '+key)
     
 
@@ -1062,7 +1045,7 @@ class WindFarm:
                 plt.figure(200+fig)
                 plt.subplot(self.Nturbine,1,i)
                 plt.hold('on')
-                plt.plot(time['Inputs'],    Primal['Turbine',i,'States',:-1,key],color=col,linewidth = LW)
+                plt.plot(time['Inputs'],    Primal['Turbine',i,'States',:-1,key],color=col,linewidth = LW, linestyle = style)
                 if (key == 'Og'):
                     plt.axhline(y=Ogmax, xmin=0, xmax=time['Inputs'][-1])
 

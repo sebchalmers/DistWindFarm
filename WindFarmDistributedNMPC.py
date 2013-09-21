@@ -25,8 +25,6 @@ Nturbine = 4
 Nshooting = 50
 Nsimulation = 250
 
-
-
 ScaleT = 1e-4
 
 N = 97. 
@@ -90,40 +88,46 @@ lambda_       = 9.
 kwind         = 3.
 TauWind       = 600.
 
-#plt.figure()
-#plt.hold('on')
-#WProfiles = []
-#for k in range(Nturbine):
-#    #a,_ = GenWind(lambda_, kwind, TauWind,Nshooting)
-#    Wk = [W0]
-#    for k in range(Nsimulation+Nshooting):
-#        Wk.append(Wk[-1] + rand.normalvariate(5e-3,5e-2) + 0*(8. - Wk[-1]))    
-#    WProfiles.append(Wk)
-#    plt.plot([k*dt for k in range(Nsimulation+Nshooting+1)],Wk)
-#
-#plt.show()
-#raw_input()
-#plt.close()
-#
-#Dic = {}
-#for i in range(Nturbine):
-#    Dic['Wind'+str(i)] = WProfiles[i]
-#scipy.io.savemat('WindData2', Dic)
+NewWind = False
 
-Dic = scipy.io.loadmat('WindData')
+if NewWind:
+                       print "Draw New Wind Profile"
+                       plt.figure()
+                       plt.hold('on')
+                       WProfiles = []
+                       for k in range(Nturbine):
+                           #a,_ = GenWind(lambda_, kwind, TauWind,Nshooting)
+                           Wk = [W0]
+                           for k in range(Nsimulation+Nshooting):
+                               Wk.append(Wk[-1] + rand.normalvariate(5e-3,5e-2) + 0*(8. - Wk[-1]))    
+                           WProfiles.append(Wk)
+                           plt.plot([k*dt for k in range(Nsimulation+Nshooting+1)],Wk)
+                       
+                       plt.show()
+                       raw_input()
+                       plt.close()
+                       #
+                       #Dic = {}
+                       #for i in range(Nturbine):
+                       #    Dic['Wind'+str(i)] = WProfiles[i]
+                       #scipy.io.savemat('WindData2', Dic)
 
-plt.figure()
-plt.hold('on')
-WProfiles = []
-for i in range(Nturbine):
-    Wk = Dic['Wind'+str(i)].ravel()
-    WProfiles.append(list(Wk))
-    
-    plt.plot([k*dt for k in range(Nsimulation+Nshooting+1)],Wk)
-
-plt.show()
-raw_input()
-plt.close()
+else:
+                       print "Load Wind Profile"
+                       Dic = scipy.io.loadmat('WindData')
+                       
+                       plt.figure()
+                       plt.hold('on')
+                       WProfiles = []
+                       for i in range(Nturbine):
+                           Wk = Dic['Wind'+str(i)].ravel()
+                           WProfiles.append(list(Wk))
+                           
+                           plt.plot([k*dt for k in range(Nsimulation+Nshooting+1)],Wk)
+                       
+                       plt.show()
+                       raw_input()
+                       plt.close()
 
 T = Turbine(Inputs = ['dbeta', 'Tg'], States = ['Og', 'beta'], Slacks = ['sOg'])
 
@@ -160,29 +164,21 @@ T.setDynamics(RHS, dt = dt)
 ScaleLocalCost = 1/W0**3
 
 #Cost function
-Cost  = (T.Inputs['Tg'] - T.InputsPrev['Tg'])**2#(1e-2*T.PowerVar/(0.5*rho*A)/ScaleT)**2                 # Power variation
-Cost += T.Inputs['dbeta']**2                                    # Pitch rate
-Cost += -Cp*T.Wind**3                                           # Power capture
+Cost  = (T.Inputs['Tg'] - T.InputsPrev['Tg'])**2                # Torque variation
+Cost += T.Inputs['dbeta']**2                                    # Pitch  rate
+Cost += -Cp*T.Wind**3                                           # Power  capture
 
-Cost += T.Slacks['sOg']**2 + 0.1*T.Slacks['sOg']
+Cost += T.Slacks['sOg']**2 + 0.25*T.Slacks['sOg']
 
 CostTerminal = -Cp*T.Wind**3
-CostTerminal += T.Slacks['sOg']**2 + 0.1*T.Slacks['sOg']
+CostTerminal += T.Slacks['sOg']**2 + 0.25*T.Slacks['sOg']
 
 Cost         *= ScaleLocalCost
 CostTerminal *= ScaleLocalCost
 
-#StageIneqConst = [
-#                        T.Inputs['Tg'], 
-#                 ]
-#    
-#TerminalIneqConst = [
-#                        T.States['beta']
-#            ]
-
 IneqConst = [
-                        Ogmin  - T.States['Og'] - T.Slacks['sOg'], # , # <= 0 
-                       -Ogmax  + T.States['Og'] - T.Slacks['sOg']  # <= 0  - T.Slacks['sOg']
+                        Ogmin  - T.States['Og'] - T.Slacks['sOg'], # <= 0 
+                       -Ogmax  + T.States['Og'] - T.Slacks['sOg']  # <= 0 
             ]
 
 T.setIneqConst(IneqConst)
@@ -302,43 +298,20 @@ StepSizeLog  = []
 StatusLog    = []
 for k in range(Nsimulation):
 
-                       ##Central Solution
+                       #Central Solution
+                       #if k > 0:
+                       #    F.EP['Turbine',:,'States0'] = StatePlusCentral
                        #PrimalCentral, AdjointsCentral = F.Solve(WProfiles, time = k)
-                       #F.PlotBasic(T, PrimalCentral, time, 'k', LW = 2)
-                       ##F.init = PrimalCentral
-                       #
-                       # SQP Step
+                       #F.init = PrimalCentral
+
+                       ## SQP Step
+                       if k > 0:
+                            F.EP['Turbine',:,'States0'] = StatePlusDistributed
                        PrimalDistributed, AdjointsDistributed, Dual, Residual, StepSize, Status = F.DistributedSQP(PrimalDistributed, AdjointsDistributed, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1, FullDualStep = True)
                        ResidualLog.append(float(np.sqrt(np.dot(Residual.T,Residual))))
                        StepSizeLog.append(StepSize)
                        StatusLog.append(Status)
-                       #raw_input()
-                       #F.PlotBasic(T, PrimalDistributed, time, 'r')
                        
-                       print "Step: ", k
-                       #raw_input()
-                       #key = 'Og'
-                       #col = 'r'
-                       #for i in range(F.Nturbine):
-                       #           plt.figure(200)
-                       #           plt.subplot(F.Nturbine,1,i)
-                       #           plt.hold('on')
-                       #           plt.plot(time['Inputs'],    PrimalDistributed['Turbine',i,'States',:-1,key],color=col)
-                       #           if (key == 'Og'):
-                       #               plt.axhline(y=Ogmax, xmin=0, xmax=time['Inputs'][-1],color = 'k')
-                       #
-                       #plt.title('State '+key)
-                       #
-                       plt.close('all')
-                       #F.PlotBasic(T, PrimalDistributed, time, 'r')
-                       #raw_input()
-
-               
-                       
-                       #Check
-                       #errorDist = PrimalCentral.cat - PrimalDistributed.cat
-                       #errorDist = np.sqrt(np.dot(errorDist.T,errorDist))
-                       #DistributedError.append(float(errorDist))
                        
                        #Store
                        for i in range(Nturbine):
@@ -347,24 +320,24 @@ for k in range(Nsimulation):
                        F.StorageDistributed['PowerVar',k] = float(PrimalDistributed['PowerVar',0])     
                        #F.StorageCentral['PowerVar',k]     = float(PrimalCentral['PowerVar',0])
                        
-                       #Catch the first input                   
-                       F.EP['Turbine',:,'Inputs0'] = PrimalDistributed['Turbine',:,'Inputs',0]
-                       
-                       
                        #Actual wind profile at current time
                        Wact = [WProfiles[i][k] for i in range(Nturbine)]
                        
-                       #Simulate
-                       F.EP['Turbine',:,'States0'] = F.Simulate(Wact)
+                       #Simulate Distributed
+                       F.EP['Turbine',:,'Inputs0'] = PrimalDistributed['Turbine',:,'Inputs',0]
+                       StatePlusDistributed = F.Simulate(Wact)
                        
+                       ##Simulate Central
+                       #F.EP['Turbine',:,'Inputs0'] = PrimalCentral['Turbine',:,'Inputs',0]
+                       #StatePlusCentral = F.Simulate(Wact)
+
                        error = veccat(F.EP['Turbine',:,'States0'])-veccat(PrimalDistributed['Turbine',:,'States',1])
                        print "Check simulation error = ", np.sqrt(np.dot(error.T,error))
                        
                        #Shift: Dual shifting fucks up, I dunno why !!!
-                       #PrimalDistributed, AdjointsDistributed, Dual = F.Shift(PrimalDistributed, AdjointsDistributed, Dual)  
                        PrimalDistributed, AdjointsDistributed, _ = F.Shift(PrimalDistributed, AdjointsDistributed, Dual)  
 
-                       #raw_input()
+
                        
 plt.figure(1000)
 plt.subplot(2,1,1)
@@ -374,7 +347,7 @@ plt.subplot(2,1,2)
 plt.plot(timeNMPC['Inputs'], StepSizeLog,linestyle = 'none',marker = 'o', color = 'k')
 plt.title('Dual Step Size')
 
-#F.PlotBasic(T, F.StorageCentral,     timeNMPC, 'k')
-F.PlotBasic(T, F.StorageDistributed, timeNMPC, 'r')
+#F.PlotBasic(T, F.StorageCentral,     timeNMPC, col = 'k', style = 'x', LW = 2)
+F.PlotBasic(T, F.StorageDistributed, timeNMPC, col = 'k', style = '-')
 
 plt.show()
