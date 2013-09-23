@@ -168,10 +168,10 @@ Cost  = (T.Inputs['Tg'] - T.InputsPrev['Tg'])**2                # Torque variati
 Cost += T.Inputs['dbeta']**2                                    # Pitch  rate
 Cost += -Cp*T.Wind**3                                           # Power  capture
 
-Cost += T.Slacks['sOg']**2 + 0.25*T.Slacks['sOg']
+Cost += T.Slacks['sOg']**2# + 0.25*T.Slacks['sOg']
 
 CostTerminal = -Cp*T.Wind**3
-CostTerminal += T.Slacks['sOg']**2 + 0.25*T.Slacks['sOg']
+CostTerminal += T.Slacks['sOg']**2# + 0.25*T.Slacks['sOg']
 
 Cost         *= ScaleLocalCost
 CostTerminal *= ScaleLocalCost
@@ -232,18 +232,6 @@ for i in range(Nturbine):
     F.EP['Turbine',i,'Inputs0','Tg']    = Tg0*ScaleT
 F.EP['PowerVarRef']      = 0.
 
-#X = T.States(100)
-#U = T.Inputs()
-#U['Tg'] = 10.
-#W = 0
-#PowerVar = 0
-#Xprev = T.States()
-#Uprev = T.Inputs()
-#
-#for i, var in enumerate([U, X, W, PowerVar, Uprev, Xprev]):
-#    T._StageConst.setInput(var,i)
-#T._StageConst.evaluate()
-#print T._StageConst.output()
 
 
 Primal, Adjoints = F.Solve(WProfiles)
@@ -256,28 +244,7 @@ timeNMPC = {'States': [dt*k for k in range(Nsimulation+1)],
 
 #F.PlotBasic(T, Primal, time, 'r')
 #assert(0==1)
-#gopt = F.g(F.Solver['solver'].output('g'))
 
-#for i, key in enumerate(['Turbine'+str(i)+'_IneqConst' for i in range(Nturbine)]):
-#                       
-#                       print "\n\n\n ############ Turbine", i , "#############"
-#                       print "L Bound sent", F.Solver['lbg'][key]
-#                       print "L Bound used", F._lbg[key]
-#                       print "U Bound sent", F.Solver['ubg'][key]
-#                       print "U Bound used", F._ubg[key]
-#                       print "g value   "  , gopt[key]
-                       
-#print F.Solver['solver'].getInput(4)
-#print F.Solver['solver'].getInput(5)
-#print F.Solver['solver'].output('g')
-#
-#plt.figure(666)
-#plt.plot(F.Solver['solver'].output('g'),label = 'g out',color = 'r')
-#plt.plot(F.Solver['solver'].getInput(4),label = 'lbg',linewidth = 2,color = 'k')
-#plt.plot(F.Solver['solver'].getInput(5),label = 'ubg',linewidth = 2,color = 'k')
-#plt.legend()
-#plt.show()
-#assert(0==1)
 
 #Initial guess for the dual variables
 Dual = np.array(Adjoints['PowerConst']).reshape(Nshooting,1)
@@ -296,6 +263,8 @@ AdjointsDistributed = F.g(Adjoints.cat)
 ResidualLog  = []
 StepSizeLog  = []
 StatusLog    = []
+CondLog      = []
+ErrorLog     = []
 for k in range(Nsimulation):
 
                        #Central Solution
@@ -307,10 +276,14 @@ for k in range(Nsimulation):
                        ## SQP Step
                        if k > 0:
                             F.EP['Turbine',:,'States0'] = StatePlusDistributed
-                       PrimalDistributed, AdjointsDistributed, Dual, Residual, StepSize, Status = F.DistributedSQP(PrimalDistributed, AdjointsDistributed, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1, FullDualStep = True)
+                       PrimalDistributed, AdjointsDistributed, Dual, Residual, StepSize, Status, CondHess, Error = F.DistributedSQP(PrimalDistributed, AdjointsDistributed, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1)
+
+                       ## Log info
                        ResidualLog.append(float(np.sqrt(np.dot(Residual.T,Residual))))
                        StepSizeLog.append(StepSize)
                        StatusLog.append(Status)
+                       CondLog.append(CondHess)
+                       ErrorLog.append(Error)
                        
                        
                        #Store
@@ -331,21 +304,36 @@ for k in range(Nsimulation):
                        #F.EP['Turbine',:,'Inputs0'] = PrimalCentral['Turbine',:,'Inputs',0]
                        #StatePlusCentral = F.Simulate(Wact)
 
-                       error = veccat(F.EP['Turbine',:,'States0'])-veccat(PrimalDistributed['Turbine',:,'States',1])
-                       print "Check simulation error = ", np.sqrt(np.dot(error.T,error))
-                       
+                       #error = veccat(F.EP['Turbine',:,'States0'])-veccat(PrimalDistributed['Turbine',:,'States',1])
+                       #print "Check simulation error = ", np.sqrt(np.dot(error.T,error))
+                       #
                        #Shift: Dual shifting fucks up, I dunno why !!!
                        PrimalDistributed, AdjointsDistributed, _ = F.Shift(PrimalDistributed, AdjointsDistributed, Dual)  
 
 
+
+timeDiplay = {'States': [dt*j for j in range(k+1)],
+              'Inputs': [dt*j for j in range(k)]}
                        
 plt.figure(1000)
 plt.subplot(2,1,1)
-plt.plot(timeNMPC['Inputs'], ResidualLog,linestyle = 'none',marker = 'o', color = 'k')
+plt.plot(timeDiplay['States'], ResidualLog,linestyle = 'none',marker = 'o', color = 'k')
 plt.title('Dual Residual')
 plt.subplot(2,1,2)
-plt.plot(timeNMPC['Inputs'], StepSizeLog,linestyle = 'none',marker = 'o', color = 'k')
+plt.plot(timeDiplay['States'], np.array(StepSizeLog),linestyle = 'none',marker = 'o', color = 'k')
 plt.title('Dual Step Size')
+
+CondLog = np.array(CondLog)
+plt.figure(1001)
+for fig in [0,1]:
+    plt.subplot(2,1,fig)
+    plt.plot(timeDiplay['States'], CondLog[:,fig])
+
+plt.figure(1002)
+for i in range(Nturbine):
+    plt.subplot(4,1,i)
+    plt.plot(timeNMPC['Inputs'],F.StorageDistributed['Turbine',i,'Slacks',:-1,'sOg'],color='k')
+
 
 #F.PlotBasic(T, F.StorageCentral,     timeNMPC, col = 'k', style = 'x', LW = 2)
 F.PlotBasic(T, F.StorageDistributed, timeNMPC, col = 'k', style = '-')

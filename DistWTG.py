@@ -13,19 +13,11 @@ SE-412 96 Gšteborg, SWEDEN
 grosse@chalmers.se
 
 Python/casADi Module:
-NMPC for Dynamic Optimal Power Flow and Power Dispatch
+A Fast Algorithm for Power Smoothing of Wind Farms based on Distributed Optimal Control
 
 Requires the installation of the open-source Python module casADi together with the NLP solver ipopt
 
 Required version of CasADi: v1.7.x
-
-OBS: the code assumes only simple bounds !! Can be extended by modifying method "QPStep"...
-
-TODO:
-
- - survive if no slacks are declared
- - code clean up and shortening
- - Introduce a centralized QP solver for comparison
  
 """
 
@@ -93,6 +85,21 @@ def _setSolver(self, V,Cost,g,P):
     Solver = {'solver': solver, 'H': H, 'f': f, 'dg': dg, 'g': gfunc, 'lbg': lbg, 'ubg': ubg, 'V': V}
     
     return Solver
+
+def _CreateQP(solver,V):
+    
+    solver['H'].evaluate()
+    H = solver['H'].output()
+    
+    solver['dg'].evaluate()
+    dg = solver['dg'].output()
+    
+    QPsolver = NLPQPSolver(qpStruct(h=H.sparsity(),a=dg.sparsity()))
+    QPsolver.setOption({"nlp_solver":IpoptSolver, "nlp_solver_options": {"tol": 1e-8,"verbose": 0} })
+   
+    QPsolver.init()
+
+    return QPsolver
 
 class Turbine:
     def __init__(self, Inputs = [], States = [], Slacks = []):        
@@ -407,8 +414,8 @@ class Turbine:
         self._Solver = Solver
         
         #Prepare the QP call
-        QPsolver = self._CreateQP(Solver,self.V)
-        self._QPsolver = QPsolver
+        self._QPsolver = _CreateQP(Solver,self.V)
+        
 
      
 class WindFarm:
@@ -424,12 +431,12 @@ class WindFarm:
         self.PowerSmoothingWeight = PowerSmoothingWeight
          
         #Carry over local stuff
-        self.Nsimulation    = Nsimulation
-        self._TurbineSolver = Turbine._Solver
-        self._QPsolver      = Turbine._QPsolver
-        self._VTurbine      = Turbine.V
-        self._Shoot         = Turbine.Shoot
-        self._gLocal        = Turbine._g
+        self.Nsimulation      = Nsimulation
+        self._TurbineSolver   = Turbine._Solver
+        self._TurbineQPsolver = Turbine._QPsolver
+        self._TurbineV        = Turbine.V
+        self._Shoot           = Turbine.Shoot
+        self._gLocal          = Turbine._g
         
         #Do the wind turbines have inequality constraints ?
         if hasattr(Turbine,'_TerminalConst') or hasattr(Turbine,'_StageConst'):
@@ -500,6 +507,9 @@ class WindFarm:
         #Setup Central Solver
         Solver = _setSolver(self,V,Cost,g,EP)
         self.Solver = Solver
+        
+        ##Prepare the QP call
+        self._QPsolver = _CreateQP(Solver,self.V)
         
         self.lbV    = V(-inf)
         self.ubV    = V( inf)
@@ -591,11 +601,71 @@ class WindFarm:
         return QPs
     
     
+    def PrepareCentralQP(self, solver, Primal,Adjoint):
+            
+        EP = self.EP
+        
+        solver['H'].setInput(Primal, 0)
+        solver['H'].setInput(1.,1)
+        solver['H'].setInput(1.,2)
+        solver['H'].setInput(Adjoint,3)
+        solver['H'].evaluate()
+    
+        solver['f'].setInput(Primal, 0)
+        solver['f'].setInput(EP,1)
+        solver['f'].evaluate()
+        
+        solver['dg'].setInput(Primal, 0)
+        solver['dg'].setInput(EP,1)
+        solver['dg'].evaluate()
+        
+        solver['g'].setInput(Primal, 0)
+        solver['g'].setInput(EP,1)
+        solver['g'].evaluate()
+    
+        QP =       {
+                    'H'  : DMatrix(solver[ 'H'].output()),
+                    'f'  : DMatrix(solver[ 'f'].output()),
+                    'dg' : DMatrix(solver['dg'].output()),
+                    'g'  : DMatrix(solver[ 'g'].output()),
+                    'lbX': DMatrix(self.lbV.cat - Primal.cat),
+                    'ubX': DMatrix(self.ubV.cat - Primal.cat),
+                    'lbg': DMatrix(solver['lbg'].cat - solver['g'].output()),
+                    'ubg': DMatrix(solver['ubg'].cat - solver['g'].output())
+                    }
+        
+        return QP
+    
+    def solveQP(self, Solver, QP, fadd = 0):
+        
+        H   = DMatrix(QP['H'])
+        f   = DMatrix(QP['f'])
+        dg  = DMatrix(QP['dg'])
+        g   = DMatrix(QP['g'])
+        lbX = DMatrix(QP['lbX'])
+        ubX = DMatrix(QP['ubX'])
+        
+        lbg = DMatrix(QP['lbg'])
+        ubg = DMatrix(QP['ubg'])
+        
+        
+        #Set solver
+
+        Solver.setInput( H,      'h')
+        Solver.setInput( f+fadd,  'g')
+        Solver.setInput( dg,     'a')
+        Solver.setInput( lbX,    'lbx')
+        Solver.setInput( ubX,    'ubx')
+        Solver.setInput( lbg,    'lba')
+        Solver.setInput( ubg,    'uba')
+
+        Solver.solve()
+    
     def QPStep(self, QPs, Dual):
         ### Distributed solver ###
         ### All the operation performed within this method are meant to be local ###
         
-        V = self._VTurbine
+        V = self._TurbineV
             
         Xall = []
         AdjointUpdate  = self.g()
@@ -615,46 +685,26 @@ class WindFarm:
             DualHess = -np.eye(self.Nshooting)
             
         for i in range(self.Nturbine):
-            Hi   = DMatrix(QPs[i]['H'])
-            fi   = DMatrix(QPs[i]['f'])
-            dgi  = DMatrix(QPs[i]['dg'])
-            gi   = DMatrix(QPs[i]['g'])
-            lbXi = DMatrix(QPs[i]['lbX'])
-            ubXi = DMatrix(QPs[i]['ubX'])
-            
-            lbgi = DMatrix(QPs[i]['lbg'])
-            ubgi = DMatrix(QPs[i]['ubg'])
-            
+
             #Index of the power variations
             IndexDual = list(V.i['PowerVar',veccat])
             
             #Dualize the coupling constraint
-            f_dual = DMatrix(fi)
+            fadd = np.zeros(QPs[i]['f'].shape)
             for m, index in enumerate(IndexDual):
-                f_dual[index] -= Dual[m]
-            
-            #Set solver
+                fadd[index] -= Dual[m]
+               
 
-            self._QPsolver.setInput( Hi,      'h')
-            self._QPsolver.setInput( f_dual,  'g')
-            self._QPsolver.setInput( dgi,     'a')
-            self._QPsolver.setInput( lbXi,    'lbx')
-            self._QPsolver.setInput( ubXi,    'ubx')
-            self._QPsolver.setInput( lbgi,    'lba')
-            self._QPsolver.setInput( ubgi,    'uba')
-    
-            self._QPsolver.solve()
-    
-            #Status['QPsolver'].append(self._QPsolver.getStat('return_status'))
+            self.solveQP(self._TurbineQPsolver, QPs[i], fadd)
             
-            X        = np.array(self._QPsolver.output('x'))
-            Mug      = list(self._QPsolver.output('lam_a'))
-            MuBound  = list(self._QPsolver.output('lam_x'))
+            X        = np.array(self._TurbineQPsolver.output('x'))
+            Mug      = list(self._TurbineQPsolver.output('lam_a'))
+            MuBound  = list(self._TurbineQPsolver.output('lam_x'))
             
 
             
             #Detect active/inactive bounds            
-            eps = 1e-2 #active constraint threshold
+            eps = 1e-10 #active constraint threshold
             
             ###############################################
             # Constraints, generic form:
@@ -667,9 +717,15 @@ class WindFarm:
             # Mu are the associated multipliers
             # A has as many lines as there are Mu:s
             
-            lb = np.concatenate([np.array(lbXi),np.array(lbgi)])
-            ub = np.concatenate([np.array(ubXi),np.array(ubgi)])
-            A  = np.concatenate([np.eye(X.shape[0]),np.array(dgi)])
+            lbXi = np.array(QPs[i]['lbX'])
+            ubXi = np.array(QPs[i]['ubX'])
+            dgi  = np.array(QPs[i]['dg'])
+            lbgi = np.array(QPs[i]['lbg'])
+            ubgi = np.array(QPs[i]['ubg'])
+            
+            lb = np.concatenate([lbXi,lbgi])
+            ub = np.concatenate([ubXi,ubgi])
+            A  = np.concatenate([np.eye(X.shape[0]),dgi])
             Mu = MuBound+Mug
             
             
@@ -758,11 +814,12 @@ class WindFarm:
             #dPrimalAdjoint = KKT\b
             try:
                 dPrimalAdjoint = linalg.solve(KKT,b)
+                Status['Factorization'].append(True) 
             except: #In case of a badly identified Active Set
                 Status['Factorization'].append('RankDefficienty, Turbine'+str(i))
                 dPrimalAdjoint, _, _, _ = linalg.lstsq(KKT,b)
                 print "Singular KKT matrix"
-                raw_input()
+                Status['Factorization'].append(False)
                 
             #The "dPrimalAdjoint" provides:
             #[d X       ]
@@ -802,7 +859,7 @@ class WindFarm:
             
             Xall.append(V(X))
     
-            AdjointQP = self._gLocal(self._QPsolver.output('lam_a'))
+            AdjointQP = self._gLocal(self._TurbineQPsolver.output('lam_a'))
     
             for key in AdjointQP.keys():
                 AdjointUpdate['Turbine'+str(i)+'_'+key] = AdjointQP[key]
@@ -817,6 +874,17 @@ class WindFarm:
         #while (LocalResidual > 1e-6):
         for iterate in range(iter_SQP):
             
+            #Solve central QP
+            #QPCentral = self.PrepareCentralQP(self.Solver, Primal, Adjoint)
+            #self.solveQP(self._QPsolver, QPCentral)
+            #StepCentral = self.V(self._QPsolver.output('x'))
+            #muCentral = self.g(DMatrix(self._QPsolver.output('lam_a')))
+            #DualCentral = np.array(muCentral['PowerConst',veccat])
+            
+            #AdjointCentral = []
+            #for i in range(self.Nturbine):
+            #    AdjointCentral.append(DMatrix(muCentral['Turbine',i,]))
+            
             #Construct local QPs (without dualization)
             QPs = self.PrepareQPs(Primal,Adjoint)
             
@@ -826,7 +894,8 @@ class WindFarm:
                 
             #Dual decomposition iteration
             Norm_Dual = []
-            CondHess = []
+            CondHess  = []
+            tstepLog  = []
             StatusLog = []
             for iter_dual in range(iter_Dual):
             
@@ -836,8 +905,8 @@ class WindFarm:
                 StatusLog.append(Status)
                 
                 #Check Dual Hessian conditioning
-                #u, s, vh = linalg.svd(DualHess)
-                #CondHess.append(s[0]/s[-1])
+                eig, _ = linalg.eig(DualHess)
+                CondHess = [np.min(np.real(eig)), np.max(np.real(eig))]
                 
                 if (self.PowerSmoothingWeight > 0):
                     #z step
@@ -878,6 +947,7 @@ class WindFarm:
                 else:
                     tstep = 1.
                 
+                tstepLog.append(tstep)
                 #######################################################
                 
 
@@ -889,12 +959,9 @@ class WindFarm:
                 
             if (ReUpdate == True):
                 for i in range(self.Nturbine):
-                    StepLocal[i] = self._VTurbine(StepLocal[i].cat + np.dot(dPrimal[i],-tstep*StepDual))
+                    StepLocal[i] = self._TurbineV(StepLocal[i].cat + np.dot(dPrimal[i],-tstep*StepDual))
                     
-                    AdjointUpdate = self._gLocal()
-                    #print AdjointUpdate.shape
-                    #print np.dot(dAdjoint[i],-tstep*StepDual).shape
-                    #raw_input()
+                    AdjointUpdate = self._gLocal(np.dot(dAdjoint[i],-tstep*StepDual))
                     for key in AdjointUpdate.keys():
                         Adjoint['Turbine'+str(i)+'_'+key] = AdjointUpdate[key]
                 
@@ -914,6 +981,13 @@ class WindFarm:
             ##raw_input()
             #plt.close()
             
+            Error = {}
+            #Error['PrimalStep'] = 0
+            #for i in range(self.Nturbine):
+            #    Error['PrimalStep'] += linalg.norm(StepCentral['Turbine',i] - StepLocal[i].cat)
+            #    
+            #Error['Adjoint'] = linalg.norm(Adjoint.cat - muCentral.cat)
+            #Error['Dual']    = linalg.norm(DualCentral - Dual)
       
             #Update primal variables
             for index in range(len(Primal['PowerVar'])):
@@ -942,11 +1016,10 @@ class WindFarm:
             print "Iter \t Dual Residual \t Dual step-size \t  Dual full step norm \t Local Residuals"
             print "%3d  \t %.5E \t %.5E  \t %.5E  \t %.5E" %  (iter_dual, NormResidual,  tstep,  NormStepDual, LocalResidual)
                                     	 
-            if (tstep < 1.):
-                raw_input()
+
 
             
-        return Primal, Adjoint, Dual, ResidualOut, tstep, StatusLog
+        return Primal, Adjoint, Dual, ResidualOut, tstep, StatusLog, CondHess, Error
     
     ############ Simulation ########
     def Simulate(self,W):
@@ -1004,8 +1077,8 @@ class WindFarm:
         for type_ in key_dic.keys():
             for key in key_dic[type_]:
                 for k in range(Nturbine):
-                    Primal_struc  = self._VTurbine(Primal['Turbine'][k])
-                    Primal0_struc = self._VTurbine(Primal0['Turbine'][k])
+                    Primal_struc  = self._TurbineV(Primal['Turbine'][k])
+                    Primal0_struc = self._TurbineV(Primal0['Turbine'][k])
                     diff   = veccat(Primal_struc[type_,:,key])-veccat(Primal0_struc[type_,:,key])
                
                     plt.figure(10+counter)
