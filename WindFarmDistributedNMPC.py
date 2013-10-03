@@ -134,10 +134,17 @@ else:
                        raw_input()
                        plt.close()
 
+time = {'States': [dt*k for k in range(Nshooting+1)],
+        'Inputs': [dt*k for k in range(Nshooting)]}
+
+timeNMPC = {'States': [dt*k for k in range(Nsimulation+1)],
+            'Inputs': [dt*k for k in range(Nsimulation)]}
+
+
+#Declare a Turbine object
 T = Turbine(Inputs = ['dbeta', 'Tg'], States = ['Og', 'beta'], Slacks = ['sOg'])
-
  
-
+#Construct Turbine Model
 p00 =     -0.1835 
 p10 =   -0.006315  
 p01 =     -0.0103  
@@ -215,8 +222,9 @@ T.setCost(CostTerminal, Terminal = True)
 
 T.setTurbine(Nshooting = Nshooting, Nsimulation = Nsimulation)
 
-F = WindFarm(T, Nturbine = Nturbine, PowerSmoothingWeight = PowerSmoothingWeight)
 
+#Construct a wind farm object from turbine object
+F = WindFarm(T, Nturbine = Nturbine)
 
 
 # Set bounds
@@ -243,9 +251,14 @@ F.ubV['Turbine',:,'Inputs',:,'dbeta'] =  dbetamax
 F.lbV['Turbine',:,'Inputs',:,'Tg']    =  Tgmin*ScaleT
 F.ubV['Turbine',:,'Inputs',:,'Tg']    =  Tgmax*ScaleT
 
+#Insert multiple simulations here !!
+
+#Power smoothing parameters
+F.EP['PowerVarRef']          = 0.
+F.EP['PowerSmoothingWeight'] = PowerSmoothingWeight
+
 #Distribute Initial conditions
 Og0k = [rand.normalvariate(Og0,0.0*Og0) for k in range(Nturbine)]
-#Og0k = [0.95*Og0 + 0.1*k*Og0/float(Nturbine-1) for k in range(Nturbine)]
 beta0 = [max(0.99*BetaOpt,min(0.99*betamax,rand.normalvariate(BetaOpt,0))) for i in range(Nturbine)]
 
 for i in range(Nturbine):    
@@ -253,19 +266,11 @@ for i in range(Nturbine):
     F.EP['Turbine',i,'States0','Og']    = max(Ogmin,min(Ogmax,Og0k[i]))
     F.EP['Turbine',i,'Inputs0','dbeta'] = 0.
     F.EP['Turbine',i,'Inputs0','Tg']    = Tg0*ScaleT
-F.EP['PowerVarRef']      = 0.
-
-
-
+    
+#Compute initial solution (centrally) for warm-starting
 Primal, Adjoints = F.Solve(WProfiles)
 
-time = {'States': [dt*k for k in range(Nshooting+1)],
-        'Inputs': [dt*k for k in range(Nshooting)]}
-
-timeNMPC = {'States': [dt*k for k in range(Nsimulation+1)],
-            'Inputs': [dt*k for k in range(Nsimulation)]}
-
-
+F.PlotBasic(T, Primal, time, col = 'k', style = '-')
 
 #Initial guess for the dual variables
 Dual = np.array(Adjoints['PowerConst']).reshape(Nshooting,1)
@@ -273,14 +278,11 @@ Dual = np.array(Adjoints['PowerConst']).reshape(Nshooting,1)
 ##### NMPC LOOP #####
 #Note: the initial conditions (and inputs) are communicated via F.EP, the wind profiles are sent independently
 
-
-
-DistributedError = []
-
 #Create independent copies for the distributed problem
 PrimalDistributed   = F.V(Primal.cat)
 AdjointsDistributed = F.g(Adjoints.cat)
 
+#Some log...
 ResidualLog     = []
 StepSizeLog     = []
 StatusLog       = []
@@ -307,39 +309,14 @@ for k in range(Nsimulation):
                        ## SQP Step
                        if k > 0:
                             F.EP['Turbine',:,'States0'] = StatePlusDistributed
+                            
                        PrimalDistributed, AdjointsDistributed, Dual, Residual, StepSize, Status, CondHess, Error, A, Mu, Gap, MuCheck, QPs = F.DistributedSQP(PrimalDistributed, AdjointsDistributed, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1, FullDualStep = True, ReUpdate = True)
                        
+                       ## Logger
                        AdjointLog.append(np.array(AdjointsDistributed.cat))
                        MuLog.append(Mu)
                        GapLog.append(Gap)
                        MuCheckLog.append(MuCheck)
-                       
-                       #Check Activation/Deactivation
-                       if (k == 0):
-                                              ActivationLog.append([])
-                                              DeActivationLog.append([])
-                       else:
-                                              Activation   = []
-                                              DeActivation = []
-                                              for i in range(Nturbine):
-                                                  Activation_i   = []
-                                                  DeActivation_i = []
-                                                  for index in A['AB'][i]:
-                                                      if not(index in ALog[-1]['AB'][i]):
-                                                          Activation_i.append(F._TurbineV.getLabel(index))
-                                                  for index in ALog[-1]['AB'][i]:
-                                                      if not(index in A['AB'][i]):
-                                                          DeActivation_i.append(F._TurbineV.getLabel(index))
-                                                      
-                                                  Activation.append(    Activation_i)
-                                                  DeActivation.append(DeActivation_i)   
-                                              
-                                              ActivationLog.append(    Activation)
-                                              DeActivationLog.append(DeActivation)
-                       ALog.append(A)
-                       
-
-                       ## Log info
                        ResidualLog.append(float(np.sqrt(np.dot(Residual.T,Residual))))
                        StepSizeLog.append(StepSize)
                        StatusLog.append(Status)
@@ -366,58 +343,9 @@ for k in range(Nsimulation):
                        #StatePlusCentral = F.Simulate(Wact)
 
                        #Shift: Dual shifting fucks up, I dunno why !!!
-                       PrimalDistributed, AdjointsDistributed, _ = F.Shift(PrimalDistributed, AdjointsDistributed, Dual)  
-
-                                 
-
-timeDiplay = {'States': [dt*j for j in range(k+1)],
-              'Inputs': [dt*j for j in range(k)]}
+                       PrimalDistributed, AdjointsDistributed, _ = F.Shift(PrimalDistributed, AdjointsDistributed, Dual)
                        
-#plt.figure(1000)
-#plt.subplot(2,1,1)
-#plt.plot(timeDiplay['States'], ResidualLog,linestyle = 'none',marker = 'o', color = 'k')
-#plt.title('Dual Residual')
-#plt.subplot(2,1,2)
-#plt.plot(timeDiplay['States'], np.array(StepSizeLog),linestyle = 'none',marker = 'o', color = 'k')
-#plt.title('Dual Step Size')
-#
-#CondLog = np.array(CondLog)
-#plt.figure(1001)
-#for fig in [0,1]:
-#    plt.subplot(2,1,fig)
-#    plt.plot(timeDiplay['States'], CondLog[:,fig])
-#
-#plt.figure(1002)
-#for i in range(Nturbine):
-#    plt.subplot(4,1,i)
-#    plt.plot(timeNMPC['Inputs'],F.StorageDistributed['Turbine',i,'Slacks',:-1,'sOg'],color='k')
-#
-#
-##F.PlotBasic(T, F.StorageCentral,     timeNMPC, col = 'k', style = 'x', LW = 2)
-#F.PlotBasic(T, F.StorageDistributed, timeNMPC, col = 'k', style = '-')
-#
-#plt.show()
-#
-#plt.figure(1000)
-#plt.subplot(2,1,1)
-#plt.plot(timeDiplay['Inputs'], ResidualLog,linestyle = 'none',marker = 'o', color = 'k')
-#plt.title('Dual Residual')
-#plt.subplot(2,1,2)
-#plt.plot(timeDiplay['Inputs'], np.array(StepSizeLog),linestyle = 'none',marker = 'o', color = 'k')
-#plt.title('Dual Step Size')
-#
-#CondLog = np.array(CondLog)
-#plt.figure(1001)
-#for fig in [0,1]:
-#    plt.subplot(2,1,fig)
-#    plt.plot(timeDiplay['Inputs'], CondLog[:,fig])
-#
-##plt.figure(1002)
-##for i in range(Nturbine):
-##    plt.subplot(4,1,i)
-##    plt.plot(timeNMPC['Inputs'],F.StorageDistributed['Turbine',i,'Slacks',:-1,'sOg'],color='k')
-#
-
+                       
 #F.PlotBasic(T, F.StorageCentral,     timeNMPC, col = 'k', style = 'x', LW = 2)
 F.PlotBasic(T, F.StorageDistributed, timeNMPC, col = 'k', style = '-')
 

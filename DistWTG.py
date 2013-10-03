@@ -421,7 +421,7 @@ class Turbine:
      
 class WindFarm:
     
-    def __init__(self, Turbine, Nturbine = 0, PowerSmoothingWeight = 0.):     
+    def __init__(self, Turbine, Nturbine = 0):     
         
         
         self.Nturbine   = Nturbine
@@ -429,7 +429,6 @@ class WindFarm:
         Nsimulation     = Turbine.Nsimulation
 
         self.Nshooting            = Nshooting
-        self.PowerSmoothingWeight = PowerSmoothingWeight
          
         #Carry over local stuff
         self.Nsimulation      = Nsimulation
@@ -454,9 +453,12 @@ class WindFarm:
     
         self.V = V
         
+        PowerSmoothingWeight = ssym('PowerSmoothingWeight')
+        
         EP          =       struct_msym([
-                                            entry('Turbine',     struct = Turbine.EP,             repeat = Nturbine  ), 
-                                            entry('PowerVarRef', struct = Turbine.PowerVar,       repeat = Nshooting )
+                                            entry('Turbine',              struct = Turbine.EP,             repeat = Nturbine  ), 
+                                            entry('PowerVarRef',          struct = Turbine.PowerVar,       repeat = Nshooting ),
+                                            entry('PowerSmoothingWeight', struct = PowerSmoothingWeight)
                                         ])
         
         self.EP = EP()
@@ -485,7 +487,7 @@ class WindFarm:
                 TotPowerVar_k -= V['Turbine',i,'PowerVar',k]
                 
             TotPowerVar.append(TotPowerVar_k)
-            Cost += 0.5*PowerSmoothingWeight*(EP['PowerVarRef',k]-V['PowerVar', k])**2
+            Cost += 0.5*EP['PowerSmoothingWeight']*(EP['PowerVarRef',k]-V['PowerVar', k])**2
             
         Const.append(entry('PowerConst',    expr = TotPowerVar))
 
@@ -532,6 +534,7 @@ class WindFarm:
             self.lbV['Turbine', i,'Wind']  = Wact[i][time:]
             self.ubV['Turbine', i,'Wind']  = Wact[i][time:]
             self.init['Turbine',i,'Wind']  = Wact[i][time:]
+        
   
     def Solve(self,Wact, time = 0):
         
@@ -684,8 +687,8 @@ class WindFarm:
         Homotopy = {'Primal':{'Matrices': [], 'RHS':[]}, 'Dual':{'Matrices': [], 'RHS':[]}}
         
         Status = {'QPsolver' : [], 'Factorization': []}
-        if (self.PowerSmoothingWeight > 0):
-            DualHess = -np.eye(self.Nshooting)/self.PowerSmoothingWeight
+        if (self.EP['PowerSmoothingWeight'] > 0):
+            DualHess = -np.eye(self.Nshooting)/self.EP['PowerSmoothingWeight']
         else:
             #To allow simulations with no smoothing
             DualHess = -np.eye(self.Nshooting)
@@ -937,9 +940,9 @@ class WindFarm:
                 eig, _ = linalg.eig(DualHess)
                 CondHess = [np.min(np.real(eig)), np.max(np.real(eig))]
                 
-                if (self.PowerSmoothingWeight > 0):
+                if (self.EP['PowerSmoothingWeight'] > 0):
                     #z step
-                    Stepz = self.EP['PowerVarRef',veccat]-Primal['PowerVar',veccat] - Dual/float(self.PowerSmoothingWeight)
+                    Stepz = self.EP['PowerVarRef',veccat]-Primal['PowerVar',veccat] - Dual/float(self.EP['PowerSmoothingWeight'])
                 
                     #Constraints residual
                     Residual = Primal['PowerVar',veccat] + Stepz
@@ -1010,8 +1013,8 @@ class WindFarm:
                     for key in AdjointUpdate.keys():
                         Adjoint['Turbine'+str(i)+'_'+key] = AdjointUpdate[key]
                 
-                if (self.PowerSmoothingWeight > 0):
-                    Stepz = self.EP['PowerVarRef',veccat]-Primal['PowerVar',veccat] - Dual/float(self.PowerSmoothingWeight)
+                if (self.EP['PowerSmoothingWeight'] > 0):
+                    Stepz = self.EP['PowerVarRef',veccat]-Primal['PowerVar',veccat] - Dual/float(self.EP['PowerSmoothingWeight'])
                 
             #######################################################
                 
