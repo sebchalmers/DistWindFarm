@@ -2,21 +2,20 @@
 """
 Created on Fri Nov 16 20:18:08 2012
 
-@author: Sebastien Gros
+@author:
 
+Sebastien Gros
 Assistant Professor
  
 Department of Signals and Systems
 Chalmers University of Technology
-SE-412 96 Göteborg, SWEDEN
-grosse@chalmers.se
+SE-412 96 Göteborg, SWEDEN, grosse@chalmers.se
 
-Python/casADi Module:
-A Fast Algorithm for Power Smoothing of Wind Farms based on Distributed Optimal Control
+Simulation code for the paper
+"A Distributed Real-time Iteration approach for the Smoothing of Wind Farms Power output Based on NMPC", ECC 2014, Strasbourg
 
-Requires the installation of the open-source Python module casADi together with the NLP solver ipopt
-
-Required version of CasADi: v1.7.x
+Requires the Pyhon/casADi module DistWTG
+Requires the installation of the open-source Python module casADi (v1.7.x) together with the NLP solver ipopt
  
 """
 
@@ -80,7 +79,7 @@ dt = 0.2
 NewWind = False
 
 if NewWind:
-                       Nsimulation = 600/float(dt)    #10' simulation
+                       Nsimulation = int(5/float(dt))    #10' simulation
                        print "Draw New Wind Profile"
                        plt.figure()
                        plt.hold('on')
@@ -115,7 +114,7 @@ if NewWind:
                        Dic = {}
                        for i in range(Nturbine):
                            Dic['Wind'+str(i)] = WProfiles[i]
-                       scipy.io.savemat('WindData5', Dic)
+                       scipy.io.savemat('WindTrial', Dic)
 
 else:
                        print "Load Wind Profile"
@@ -193,10 +192,10 @@ Cost  = (T.Inputs['Tg'] - T.InputsPrev['Tg'])**2                # Torque variati
 Cost += T.Inputs['dbeta']**2                                    # Pitch  rate
 Cost += -Cp*T.Wind**3                                           # Power  capture
 
-Cost += T.Slacks['sOg']**2
+Cost += 2*T.Slacks['sOg']**2
 
 CostTerminal = -Cp*T.Wind**3
-CostTerminal += T.Slacks['sOg']**2
+CostTerminal += 2*T.Slacks['sOg']**2
 
 Cost         *= ScaleLocalCost
 CostTerminal *= ScaleLocalCost
@@ -252,101 +251,110 @@ F.lbV['Turbine',:,'Inputs',:,'Tg']    =  Tgmin*ScaleT
 F.ubV['Turbine',:,'Inputs',:,'Tg']    =  Tgmax*ScaleT
 
 #Insert multiple simulations here !!
+STY = [':','-']
+for iweight, PowerSmoothingWeight in enumerate([0., 1e-2]):
 
-#Power smoothing parameters
-F.EP['PowerVarRef']          = 0.
-F.EP['PowerSmoothingWeight'] = PowerSmoothingWeight
-
-#Distribute Initial conditions
-Og0k = [rand.normalvariate(Og0,0.0*Og0) for k in range(Nturbine)]
-beta0 = [max(0.99*BetaOpt,min(0.99*betamax,rand.normalvariate(BetaOpt,0))) for i in range(Nturbine)]
-
-for i in range(Nturbine):    
-    F.EP['Turbine',i,'States0','beta']  = beta0[i]
-    F.EP['Turbine',i,'States0','Og']    = max(Ogmin,min(Ogmax,Og0k[i]))
-    F.EP['Turbine',i,'Inputs0','dbeta'] = 0.
-    F.EP['Turbine',i,'Inputs0','Tg']    = Tg0*ScaleT
-    
-#Compute initial solution (centrally) for warm-starting
-Primal, Adjoints = F.Solve(WProfiles)
-
-F.PlotBasic(T, Primal, time, col = 'k', style = '-')
-
-#Initial guess for the dual variables
-Dual = np.array(Adjoints['PowerConst']).reshape(Nshooting,1)
-
-##### NMPC LOOP #####
-#Note: the initial conditions (and inputs) are communicated via F.EP, the wind profiles are sent independently
-
-#Create independent copies for the distributed problem
-PrimalDistributed   = F.V(Primal.cat)
-AdjointsDistributed = F.g(Adjoints.cat)
-
-#Some log...
-ResidualLog     = []
-StepSizeLog     = []
-StatusLog       = []
-CondLog         = []
-ErrorLog        = []
-DualLog         = []
-ASLog           = []
-AdjointLog      = []
-MuLog           = []
-ActivationLog   = []
-DeActivationLog = []
-ALog            = []
-GapLog          = []
-MuCheckLog      = []
-
-for k in range(Nsimulation):
-
-                       #Central Solution
-                       #if k > 0:
-                       #    F.EP['Turbine',:,'States0'] = StatePlusCentral
-                       #PrimalCentral, AdjointsCentral = F.Solve(WProfiles, time = k)
-                       #F.init = PrimalCentral
-
-                       ## SQP Step
-                       if k > 0:
-                            F.EP['Turbine',:,'States0'] = StatePlusDistributed
-                            
-                       PrimalDistributed, AdjointsDistributed, Dual, Residual, StepSize, Status, CondHess, Error, A, Mu, Gap, MuCheck, QPs = F.DistributedSQP(PrimalDistributed, AdjointsDistributed, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1, FullDualStep = True, ReUpdate = True)
+                       #Power smoothing parameters
+                       F.EP['PowerVarRef']          = 0.
+                       F.EP['PowerSmoothingWeight'] = PowerSmoothingWeight
                        
-                       ## Logger
-                       AdjointLog.append(np.array(AdjointsDistributed.cat))
-                       MuLog.append(Mu)
-                       GapLog.append(Gap)
-                       MuCheckLog.append(MuCheck)
-                       ResidualLog.append(float(np.sqrt(np.dot(Residual.T,Residual))))
-                       StepSizeLog.append(StepSize)
-                       StatusLog.append(Status)
-                       CondLog.append(CondHess)
-                       ErrorLog.append(Error)
-                       DualLog.append(np.array(Dual.T))
+                       #Distribute Initial conditions
+                       Og0k = [rand.normalvariate(Og0,0.0*Og0) for k in range(Nturbine)]
+                       beta0 = [max(0.99*BetaOpt,min(0.99*betamax,rand.normalvariate(BetaOpt,0))) for i in range(Nturbine)]
+                       
+                       for i in range(Nturbine):    
+                           F.EP['Turbine',i,'States0','beta']  = beta0[i]
+                           F.EP['Turbine',i,'States0','Og']    = max(Ogmin,min(Ogmax,Og0k[i]))
+                           F.EP['Turbine',i,'Inputs0','dbeta'] = 0.
+                           F.EP['Turbine',i,'Inputs0','Tg']    = Tg0*ScaleT
+                           
+                       #Compute initial solution (centrally) for warm-starting
+                       Primal, Adjoints = F.Solve(WProfiles)
+                       
+                       #F.PlotBasic(T, Primal, time, col = 'k', style = '-')
+                       
+                       #Initial guess for the dual variables
+                       Dual = np.array(Adjoints['PowerConst']).reshape(Nshooting,1)
+                       
+                       ##### NMPC LOOP #####
+                       #Note: the initial conditions (and inputs) are communicated via F.EP, the wind profiles are sent independently
+                       
+                       #Create independent copies for the distributed problem
+                       PrimalDistributed   = F.V(Primal.cat)
+                       AdjointsDistributed = F.g(Adjoints.cat)
+                       
+                       #Some log...
+                       ResidualLog     = []
+                       StepSizeLog     = []
+                       StatusLog       = []
+                       CondLog         = []
+                       ErrorLog        = []
+                       DualLog         = []
+                       ASLog           = []
+                       AdjointLog      = []
+                       MuLog           = []
+                       ActivationLog   = []
+                       DeActivationLog = []
+                       ALog            = []
+                       GapLog          = []
+                       MuCheckLog      = []
+                       
+                       for k in range(Nsimulation):
+                       
+                                              if iweight > 0:
+                                                  #Central Solution
+                                                  if k > 0:
+                                                      F.EP['Turbine',:,'States0'] = StatePlusCentral
+                                                  PrimalCentral, AdjointsCentral = F.Solve(WProfiles, time = k)
+                                                  F.init = PrimalCentral
+                       
+                                              ## SQP Step
+                                              if k > 0:
+                                                   F.EP['Turbine',:,'States0'] = StatePlusDistributed
+                                                   
+                                              PrimalDistributed, AdjointsDistributed, Dual, Residual, StepSize, Status, CondHess, Error, A, Mu, Gap, MuCheck, QPs = F.DistributedSQP(PrimalDistributed, AdjointsDistributed, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1, FullDualStep = True, ReUpdate = True)
                                               
-                       #Store
-                       for i in range(Nturbine):
-                           F.StorageDistributed['Turbine',i,...,k] = PrimalDistributed['Turbine',i,...,0]
-                           #F.StorageCentral['Turbine',i,...,k]     = PrimalCentral['Turbine',i,...,0]
-                       F.StorageDistributed['PowerVar',k] = float(PrimalDistributed['PowerVar',0])     
-                       #F.StorageCentral['PowerVar',k]     = float(PrimalCentral['PowerVar',0])
+                                              ## Logger
+                                              AdjointLog.append(np.array(AdjointsDistributed.cat))
+                                              MuLog.append(Mu)
+                                              GapLog.append(Gap)
+                                              MuCheckLog.append(MuCheck)
+                                              ResidualLog.append(float(np.sqrt(np.dot(Residual.T,Residual))))
+                                              StepSizeLog.append(StepSize)
+                                              StatusLog.append(Status)
+                                              CondLog.append(CondHess)
+                                              ErrorLog.append(Error)
+                                              DualLog.append(np.array(Dual.T))
+                                                                     
+                                              #Store
+                                              for i in range(Nturbine):
+                                                  F.StorageDistributed['Turbine',i,...,k] = PrimalDistributed['Turbine',i,...,0]
+                                                  if iweight > 0:
+                                                      F.StorageCentral['Turbine',i,...,k]     = PrimalCentral['Turbine',i,...,0]
+                                              F.StorageDistributed['PowerVar',k] = float(PrimalDistributed['PowerVar',0])
+                                              if iweight > 0:
+                                                  F.StorageCentral['PowerVar',k]     = float(PrimalCentral['PowerVar',0])
+                                              
+                                              #Actual wind profile at current time
+                                              Wact = [WProfiles[i][k] for i in range(Nturbine)]
+                                              
+                                              #Simulate Distributed
+                                              F.EP['Turbine',:,'Inputs0'] = PrimalDistributed['Turbine',:,'Inputs',0]
+                                              StatePlusDistributed = F.Simulate(Wact)
+                                              
+                                              if iweight > 0:
+                                                 ##Simulate Central
+                                                 F.EP['Turbine',:,'Inputs0'] = PrimalCentral['Turbine',:,'Inputs',0]
+                                                 StatePlusCentral = F.Simulate(Wact)
                        
-                       #Actual wind profile at current time
-                       Wact = [WProfiles[i][k] for i in range(Nturbine)]
-                       
-                       #Simulate Distributed
-                       F.EP['Turbine',:,'Inputs0'] = PrimalDistributed['Turbine',:,'Inputs',0]
-                       StatePlusDistributed = F.Simulate(Wact)
-                       
-                       ##Simulate Central
-                       #F.EP['Turbine',:,'Inputs0'] = PrimalCentral['Turbine',:,'Inputs',0]
-                       #StatePlusCentral = F.Simulate(Wact)
+                                              #Shift: Dual shifting fucks up, I dunno why !!!
+                                              PrimalDistributed, AdjointsDistributed, _ = F.Shift(PrimalDistributed, AdjointsDistributed, Dual)
+                                              
+                                              
+                       F.PlotPaper(T, F.StorageDistributed, timeNMPC, col = 'k', style = STY[iweight], savePath = '/Users/sebastien/Desktop/OPTICON/Publications/ECC2014/GP/Figures', DataName = 'Distributed'+str(log10(1/F.EP['PowerSmoothingWeight'])))
+                       if iweight > 0:
+                           F.PlotPaper(T, F.StorageCentral    , timeNMPC, col = 'k', style = '--', savePath = '/Users/sebastien/Desktop/OPTICON/Publications/ECC2014/GP/Figures', DataName = 'Central'+str(log10(1/F.EP['PowerSmoothingWeight'])))
 
-                       #Shift: Dual shifting fucks up, I dunno why !!!
-                       PrimalDistributed, AdjointsDistributed, _ = F.Shift(PrimalDistributed, AdjointsDistributed, Dual)
-                       
-                       
-#F.PlotBasic(T, F.StorageCentral,     timeNMPC, col = 'k', style = 'x', LW = 2)
-F.PlotBasic(T, F.StorageDistributed, timeNMPC, col = 'k', style = '-')
 
-plt.show()
+
+

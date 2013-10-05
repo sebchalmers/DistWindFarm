@@ -28,6 +28,7 @@ from casadi.tools import *
 import numpy as np
 import scipy.special as sc_spec
 from scipy import linalg
+import scipy.io
 
 import matplotlib.pyplot as plt
 from pylab import matshow
@@ -66,7 +67,7 @@ def _setSolver(self, V,Cost,g,P):
     #solver.setOption("print_level",1)  
     solver.setOption("hessian_approximation","exact")
     solver.setOption("max_iter",2000)
-    solver.setOption("tol",1e-12)
+    solver.setOption("tol",1e-8)
     solver.setOption("linear_solver","ma27")
     
     solver.init()
@@ -1140,8 +1141,9 @@ class WindFarm:
                 plt.title('Step'+key)   
                 counter += 1
     
-    def PlotBasic(self, T, Primal, time, LW = 1, style = '-', col = 'k', save = False, k = 0):
+    def PlotBasic(self, T, Primal, time, LW = 1, style = '-', col = 'k', savePath = [], k = 0, DataName = []):
         
+        Dic = {}
         Ogmax = 2*pi*1173.7/60
         ScaleT = 1e-4
         Tgmax = 43093.55
@@ -1153,16 +1155,20 @@ class WindFarm:
             plt.hold('on')
             #plt.plot(time['Inputs'],Primal['Turbine',i,'PowerVar'],color=col, linestyle = style,linewidth = LW)
         plt.plot(time['Inputs'],    PowerVar,color=col, linewidth = 2, linestyle = style)
+        Dic['Power'] = PowerVar
         
-        if (save == True):
-            plt.savefig('/Users/sebastien/Desktop/PicFailure/Power'+str(k)+'.eps',format='eps')
-        
+        if isinstance(savePath,str):
+            plt.savefig(savePath+'/Power'+str(k)+'.eps',format='eps')
+            
         
         plt.figure(400)
         for i in range(self.Nturbine):
             plt.subplot(self.Nturbine,1,i+1)
             plt.step(time['States'],    Primal['Turbine',i,'Wind'],color=col,linewidth = LW, linestyle = style)
-        
+            Dic['Wind'+str(i)] = Primal['Turbine',i,'Wind']
+        if isinstance(savePath,str):
+            plt.savefig(savePath+'/Wind'+str(k)+'.eps',format='eps')
+            
         for fig, key in enumerate(T.Inputs.keys()):
             for i in range(self.Nturbine):
                 plt.figure(100+fig)
@@ -1172,9 +1178,10 @@ class WindFarm:
                 if (key == 'Tg'):
                     plt.axhline(y=Tgmax*ScaleT, xmin=0, xmax=time['Inputs'][-1])
                 plt.title('Input '+key+' Turbine '+str(i))
+                Dic['Input_'+key+'_Turbine'+str(i)] = Primal['Turbine',i,'Inputs',:,key]
     
-            if (save == True):
-                plt.savefig('/Users/sebastien/Desktop/PicFailure/Input'+key+str(k)+'.eps',format='eps')
+            if isinstance(savePath,str):
+                plt.savefig(savePath+'/Input'+key+str(k)+'.eps',format='eps')
 
         for fig, key in enumerate(['beta','Og']):
             for i in range(self.Nturbine):
@@ -1186,51 +1193,75 @@ class WindFarm:
                     plt.axhline(y=Ogmax, xmin=0, xmax=time['Inputs'][-1])
 
                 plt.title('State '+key+' Turbine '+str(i))
-    
-            if (save == True):
-                plt.savefig('/Users/sebastien/Desktop/PicFailure/States'+key+str(k)+'.eps',format='eps')
-        
-    def Plot(self, Turbine, Primal0, dt = 0.2):
-        
-        Nturbine = self.Nturbine
-        Nsubp = np.ceil(np.sqrt(Nturbine))
-        Nshooting = self.Nshooting
-        
-        time = {'States': [dt*k for k in range(Nshooting+1)],
-                'Inputs': [dt*k for k in range(Nshooting)]}
-            
-        
-        Dict = {'States':Turbine.States, 'Inputs':Turbine.Inputs}
-        fig = 0
-        for typekey in Dict.keys():
-            for key in Dict[typekey].keys():
-                for k in range(Nturbine):
-                    plt.figure(fig)
-                    plt.subplot(Nsubp,Nsubp,k)
-                    plt.hold('on')
-                    plt.plot(time[typekey],veccat(Primal0['Turbine',k,typekey,:,key]),color='k')
-                    plt.title(key)
-                fig += 1
+                Dic['State_'+key+'_Turbine'+str(i)] = Primal['Turbine',i,'States',:-1,key]
                 
-        PgTot = 0
-        for k in range(Nturbine):  
-            Pg = np.array(Primal0['Turbine',k,'PowerVar'])
-            PgTot += Pg
-            
-            plt.figure(100)
-            plt.subplot(Nsubp,Nsubp,k)
-            plt.plot(time['Inputs'],Pg)
-            plt.title('Power Variation')
+            if isinstance(savePath,str):
+                plt.savefig(savePath+'/States'+key+str(k)+'.eps',format='eps')
+                
+            if isinstance(DataName,str):
+                scipy.io.savemat(savePath+'/'+DataName, Dic)
+                
+    def PlotPaper(self, T, Primal, time, LW = 1, style = '-', col = 'k', savePath = [], k = 0, DataName = []):
         
-            plt.figure(101)
-            plt.subplot(Nsubp,Nsubp,k)
-            plt.step(time['States'],Primal0['Turbine',k,'Wind'],color = 'k')
-            plt.title('Wind')
-                    
-        plt.figure(6)
+        Dic = {'Time': time['Inputs']}
+        Ogmax = 2*pi*1173.7/60
+        ScaleT = 1e-4
+        Tgmax = 43093.55
+        
+        plt.figure(300)
         plt.hold('on')
-        plt.plot(time['Inputs'],PgTot)
-        plt.plot(time['Inputs'],self.EP['PowerVarRef'])
-        plt.title('Total Power (av. ov)')
-        plt.ylim([20,-20])
-        plt.show() 
+        PowerVar = 0
+        for i in range(self.Nturbine):
+            PowerVar += np.array(Primal['Turbine',i,'PowerVar'])
+            plt.hold('on')
+            #plt.plot(time['Inputs'],Primal['Turbine',i,'PowerVar'],color=col, linestyle = '--',linewidth = LW)
+        plt.plot(time['Inputs'],    PowerVar,color=col, linewidth = 2, linestyle = style)
+        Dic['Power'] = PowerVar
+        plt.title('TP')
+        
+        if isinstance(savePath,str):
+            plt.savefig(savePath+'/Power'+str(k)+'.eps',format='eps')
+            
+        
+        plt.figure(400)
+        plt.hold('on')
+        for i in range(self.Nturbine):
+            #plt.subplot(self.Nturbine,1,i+1)
+            plt.step(time['Inputs'],    Primal['Turbine',i,'Wind',:-1],color=col,linewidth = LW, linestyle = style)
+            Dic['Wind'+str(i)] = Primal['Turbine',i,'Wind']
+        if isinstance(savePath,str):
+            plt.savefig(savePath+'/Wind'+str(k)+'.eps',format='eps')
+            
+        for fig, key in enumerate(T.Inputs.keys()):
+            for i in range(self.Nturbine):
+                plt.figure(100+fig)
+                #plt.subplot(self.Nturbine,1,i+1)
+                plt.hold('on')
+                plt.step(time['Inputs'],    Primal['Turbine',i,'Inputs',:,key],color=col,linewidth = LW, linestyle = style)
+                if (key == 'Tg'):
+                    plt.axhline(y=Tgmax*ScaleT, xmin=0, xmax=time['Inputs'][-1],color = 'k',linewidth = 2)
+                
+                Dic['Input_'+key+'_Turbine'+str(i)] = Primal['Turbine',i,'Inputs',:,key]
+            plt.title('Input '+key)
+            
+            if isinstance(savePath,str):
+                plt.savefig(savePath+'/Input'+key+str(k)+'.eps',format='eps')
+
+        for fig, key in enumerate(['beta','Og']):
+            for i in range(self.Nturbine):
+                plt.figure(200+fig)
+                #plt.subplot(self.Nturbine,1,i+1)
+                plt.hold('on')
+                plt.plot(time['Inputs'],    Primal['Turbine',i,'States',:-1,key],color=col,linewidth = LW, linestyle = style)
+                if (key == 'Og'):
+                    plt.axhline(y=Ogmax, xmin=0, xmax=time['Inputs'][-1],color = 'k',linewidth = 2)
+
+                
+                Dic['State_'+key+'_Turbine'+str(i)] = Primal['Turbine',i,'States',:-1,key]
+            plt.title('State '+key)
+            
+            if isinstance(savePath,str):
+                plt.savefig(savePath+'/States'+key+str(k)+'.eps',format='eps')
+                
+            if isinstance(DataName,str):
+                scipy.io.savemat(savePath+'/'+DataName, Dic)
