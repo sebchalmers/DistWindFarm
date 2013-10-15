@@ -90,7 +90,7 @@ def _setSolver(self, V,Cost,g,P):
 def _CreateQP(solver,V):
     
     solver['H'].evaluate()
-    H = solver['H'].output()
+    H = solver['H'].output() + np.eye(solver['H'].output().shape[0])
     
     solver['dg'].evaluate()
     dg = solver['dg'].output()
@@ -513,7 +513,7 @@ class WindFarm:
         self.Solver = Solver
         
         ##Prepare the QP call
-        self._QPsolver = _CreateQP(Solver,self.V)
+        #self._QPsolver = _CreateQP(Solver,self.V)
         
         self.lbV    = V(-inf)
         self.ubV    = V( inf)
@@ -562,7 +562,8 @@ class WindFarm:
     
     def PrepareQPs(self, Primal,Adjoint):
             
-        QPs = []
+        QPs  = []
+        Rlog = [] #Log regularization
         
         solver = self._TurbineSolver
         for i in range(self.Nturbine):
@@ -592,8 +593,23 @@ class WindFarm:
             solver['g'].setInput(EP,1)
             solver['g'].evaluate()
         
+            H = DMatrix(solver[ 'H'].output())
+            
+
+            Eig, D  = linalg.eig(H)                
+            R = np.min(np.real(Eig))-1e-6
+            Rlog.append(R)
+            
+            IndexReg = range(H.shape[0])
+            Reg = [0 for index in range(H.shape[0])]
+            for index in IndexReg:
+                Reg[index] = 1.
+
+            
+            HReg     = H - R*np.diag(Reg)
+        
             QPs.append({
-                        'H'  : DMatrix(solver[ 'H'].output()),
+                        'H'  : HReg,
                         'f'  : DMatrix(solver[ 'f'].output()),
                         'dg' : DMatrix(solver['dg'].output()),
                         'g'  : DMatrix(solver[ 'g'].output()),
@@ -603,7 +619,7 @@ class WindFarm:
                         'ubg': DMatrix(solver['ubg'] - solver['g'].output())
                         })
             
-        return QPs
+        return QPs, Rlog
     
     
     def PrepareCentralQP(self, solver, Primal, Adjoint):
@@ -747,12 +763,15 @@ class WindFarm:
             AS = []
             AB = []
             Ag = []
+            ConstRHS  = []
             BoundsGap = np.abs(ub - lb)
-            lb_gap = lb - np.dot(A,X)
-            ub_gap = np.dot(A,X) - ub
+            AX        = np.dot(A,X)
+            lb_gap    = lb - AX
+            ub_gap    = AX - ub
             for line in range(A.shape[0]):
                 if ((lb_gap[line] >= -abs(Mu[line])) or (ub_gap[line] >= -abs(Mu[line])) or (BoundsGap[line] <= eps)) and not(line in TgIndices):
-                    AS.append(line)                    
+                    AS.append(line)
+                    ConstRHS.append(AX[line])
                     if (line < X.shape[0]):
                         AB.append(line)
                     else:
@@ -841,9 +860,16 @@ class WindFarm:
             for col, line in enumerate(IndexDual):
                 b[line,col] = 1.
             
+            #Right-hand giving the primal-dual solution
+            bsol = np.concatenate([-QPs[i]['f']-fadd,np.array(ConstRHS)])
+            
             #dPrimalAdjoint = KKT\b
             try:
                 dPrimalAdjoint = linalg.solve(KKT,b)
+                
+                #Recompute the QP primal-dual solution
+                Sol            = linalg.solve(KKT,bsol)
+                
                 Status['Factorization'].append(True) 
             except: #In case of a badly identified Active Set
                 Status['Factorization'].append('RankDefficienty, Turbine'+str(i))
@@ -868,6 +894,43 @@ class WindFarm:
             #   Homotopy[  'Dual']['Matrices']*DualStep <= Homotopy[  'Dual']['RHS']
             #
             
+            #### CHECK KKT
+            
+            X2           = Sol[:X.shape[0]]
+            MuBound2     = np.zeros([len(MuBound),1])
+            MuBound2[AB] = Sol[X.shape[0]:X.shape[0]+len(AB)]
+            Mug2         = np.zeros([len(Mug),1])
+            Mug2[Ag]     = Sol[X.shape[0]+len(AB):]
+                        
+            MuBoundError = (np.array(MuBound) - MuBound2.T).T
+            MugError     = (np.array(Mug) - Mug2.T).T
+            XError       = X2 - X
+            ErrorDual = np.sqrt(np.dot(MuBoundError.T,MuBoundError)) + np.sqrt(np.dot(MugError.T,MugError))
+            ErrorPrimal = np.sqrt(np.dot(XError.T,XError))
+            
+            if (ErrorDual > 1) or (ErrorPrimal > 1):
+                print "Error Dual  :", ErrorDual
+                print "Error Primal:", ErrorPrimal
+                #plt.figure(997)
+                #plt.plot(bsol)
+                plt.close('all')
+                plt.figure(999)
+                plt.hold('on')
+                plt.subplot(3,1,1)
+                plt.plot(X,color = 'k', linewidth = 2,label='QP sol')
+                plt.plot(X2,color = 'r',label='Reconstructed sol')
+                #plt.legend()
+                
+                plt.subplot(3,1,2)
+                plt.plot(MuBound,color = 'k', linewidth = 2)
+                plt.plot(MuBound2,color = 'r')
+                        
+                plt.subplot(3,1,3)
+                plt.plot(Mug,color = 'k', linewidth = 2)
+                plt.plot(Mug2,color = 'r')
+                self.MuBound = MuBound
+                self.MuBound2 = MuBound2
+                raw_input()
 
             
             dPrimal.append(dPrimalAdjoint[:X.shape[0],:])
@@ -917,7 +980,7 @@ class WindFarm:
             #    AdjointCentral.append(DMatrix(muCentral['Turbine',i,]))
             
             #Construct local QPs (without dualization)
-            QPs = self.PrepareQPs(Primal,Adjoint)
+            QPs, R = self.PrepareQPs(Primal,Adjoint)
             
             LocalResidual = 0
             for i in range(self.Nturbine):
@@ -1068,7 +1131,7 @@ class WindFarm:
 
 
             
-        return Primal, Adjoint, Dual, ResidualOut, tstep, StatusLog, CondHess, Error, AS, MuLog, GapLog, MuCheck, QPs
+        return Primal, Adjoint, Dual, ResidualOut, tstep, StatusLog, CondHess, Error, AS, MuLog, GapLog, QPs, R
     
     ############ Simulation ########
     def Simulate(self,W):

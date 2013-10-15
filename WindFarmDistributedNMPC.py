@@ -31,10 +31,13 @@ from matplotlib import interactive
 interactive(True)
 import scipy.io
 
-import DistWTG
-reload(DistWTG)
-from DistWTG import *
+import DistWTGCPLEX
+reload(DistWTGCPLEX)
+from DistWTGCPLEX import *
 
+#import DistWTG
+#reload(DistWTG)
+#from DistWTG import *
 
 Nturbine = 4
 Nshooting = 50
@@ -191,11 +194,11 @@ ScaleLocalCost = 1/W0**3
 #Cost function
 Cost  = (T.Inputs['Tg'] - T.InputsPrev['Tg'])**2                # Torque variation
 Cost += T.Inputs['dbeta']**2                                    # Pitch  rate
-Cost += -Cp*T.Wind**3                                           # Power  capture
+Cost += (1e3-Cp*T.Wind)*T.Wind**2                                         # Power  capture
 
 Cost += T.Slacks['sOg']**2
 
-CostTerminal = -Cp*T.Wind**3
+CostTerminal = (1e3-Cp*T.Wind)*T.Wind**2 
 CostTerminal += T.Slacks['sOg']**2
 
 Cost         *= ScaleLocalCost
@@ -251,7 +254,8 @@ F.ubV['Turbine',:,'Inputs',:,'dbeta'] =  dbetamax
 F.lbV['Turbine',:,'Inputs',:,'Tg']    =  Tgmin*ScaleT
 F.ubV['Turbine',:,'Inputs',:,'Tg']    =  Tgmax*ScaleT
 
-#Insert multiple simulations here !!
+F.lbV['Turbine',:,'Slacks'] = -1e20 # (No lower bound for pure L2 penalties)
+
 
 #Power smoothing parameters
 F.EP['PowerVarRef']          = 0.
@@ -270,7 +274,7 @@ for i in range(Nturbine):
 #Compute initial solution (centrally) for warm-starting
 Primal, Adjoints = F.Solve(WProfiles)
 
-F.PlotBasic(T, Primal, time, col = 'k', style = '-')
+#F.PlotBasic(T, Primal, time, col = 'k', style = '-')
 
 #Initial guess for the dual variables
 Dual = np.array(Adjoints['PowerConst']).reshape(Nshooting,1)
@@ -297,7 +301,7 @@ DeActivationLog = []
 ALog            = []
 GapLog          = []
 MuCheckLog      = []
-
+Rlog            = []
 for k in range(Nsimulation):
 
                        #Central Solution
@@ -310,20 +314,21 @@ for k in range(Nsimulation):
                        if k > 0:
                             F.EP['Turbine',:,'States0'] = StatePlusDistributed
                             
-                       PrimalDistributed, AdjointsDistributed, Dual, Residual, StepSize, Status, CondHess, Error, A, Mu, Gap, MuCheck, QPs = F.DistributedSQP(PrimalDistributed, AdjointsDistributed, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1, FullDualStep = True, ReUpdate = True)
+                       PrimalDistributed, AdjointsDistributed, Dual, Residual, StepSize, Status, CondHess, Error, A, Mu, Gap, QPs, R = F.DistributedSQP(PrimalDistributed, AdjointsDistributed, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1, FullDualStep = True, ReUpdate = True)
                        
                        ## Logger
                        AdjointLog.append(np.array(AdjointsDistributed.cat))
                        MuLog.append(Mu)
                        GapLog.append(Gap)
-                       MuCheckLog.append(MuCheck)
+                       
                        ResidualLog.append(float(np.sqrt(np.dot(Residual.T,Residual))))
                        StepSizeLog.append(StepSize)
                        StatusLog.append(Status)
                        CondLog.append(CondHess)
                        ErrorLog.append(Error)
                        DualLog.append(np.array(Dual.T))
-                                              
+                       Rlog.append(R)
+                       
                        #Store
                        for i in range(Nturbine):
                            F.StorageDistributed['Turbine',i,...,k] = PrimalDistributed['Turbine',i,...,0]

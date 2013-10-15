@@ -41,6 +41,25 @@ def assertList(var):
         var = [var]
     return var
 
+def RegularizeMatrix(A):
+    minEigval = 0
+    n = np.size(A,axis=1)
+    for i in range(n):
+        tempCentre = A[i,i]
+        tempRadius = 0            
+        for j in range(n):
+            if i != j:
+                tempRadius += abs(A[i,j])
+            
+        if tempCentre - tempRadius < minEigval:
+            minEigval = tempCentre - tempRadius
+    print 'Min eigenvalue:', minEigval
+    if minEigval < 0:
+        RegularizedA = A + np.eye(n)*np.abs(minEigval)
+    else:
+        RegularizedA = A
+    return RegularizedA
+
 #Solver Constructor (used in both Turbine and WindFarm class)
 def _setSolver(self, V,Cost,g,P):
 
@@ -874,7 +893,7 @@ class WindFarm:
             lb_gap = lb - AX
             ub_gap = AX - ub
             for line in range(A.shape[0]):
-                if ((lb_gap[line] >= -abs(Mu[line])) or (ub_gap[line] >= -abs(Mu[line])) or (BoundsGap[line] <= eps)) and not(line in TgIndices):
+                if ((lb_gap[line] >= -abs(Mu[line])) or (ub_gap[line] >= -abs(Mu[line])) or (BoundsGap[line] <= eps)):# and not(line in TgIndices):
                     AS.append(line)
                     ConstRHS.append(AX[line])
                     if (line < X.shape[0]):
@@ -944,29 +963,29 @@ class WindFarm:
             ErrorDual = np.sqrt(np.dot(MuBoundError.T,MuBoundError)) + np.sqrt(np.dot(MugError.T,MugError))
             ErrorPrimal = np.sqrt(np.dot(XError.T,XError))
             
-            #if (ErrorDual > 1) or (ErrorPrimal > 1):
-            #    
-            #    #plt.figure(997)
-            #    #plt.plot(bsol)
-            #    plt.close('all')
-            #    plt.figure(999)
-            #    plt.hold('on')
-            #    plt.subplot(3,1,1)
-            #    plt.plot(X,color = 'k', linewidth = 2,label='QP sol')
-            #    plt.plot(X2,color = 'r',label='Reconstructed sol')
-            #    #plt.legend()
-            #    
-            #    plt.subplot(3,1,2)
-            #    plt.plot(MuBound,color = 'k', linewidth = 2)
-            #    plt.plot(MuBound2,color = 'r')
-            #            
-            #    plt.subplot(3,1,3)
-            #    plt.plot(Mug,color = 'k', linewidth = 2)
-            #    plt.plot(Mug2,color = 'r')
-            #    self.MuBound = MuBound
-            #    self.MuBound2 = MuBound2
-            #    raw_input()
-            #######
+            if (ErrorDual > 1) or (ErrorPrimal > 1):
+                
+                #plt.figure(997)
+                #plt.plot(bsol)
+                plt.close('all')
+                plt.figure(999)
+                plt.hold('on')
+                plt.subplot(3,1,1)
+                plt.plot(X,color = 'k', linewidth = 2,label='QP sol')
+                plt.plot(X2,color = 'r',label='Reconstructed sol')
+                #plt.legend()
+                
+                plt.subplot(3,1,2)
+                plt.plot(MuBound,color = 'k', linewidth = 2)
+                plt.plot(MuBound2,color = 'r')
+                        
+                plt.subplot(3,1,3)
+                plt.plot(Mug,color = 'k', linewidth = 2)
+                plt.plot(Mug2,color = 'r')
+                self.MuBound = MuBound
+                self.MuBound2 = MuBound2
+                raw_input()
+            ######
 
             
             dPrimal.append(dPrimalAdjoint[:X.shape[0],:])
@@ -1125,7 +1144,7 @@ class WindFarm:
             #Verbose
             
             print "Time \t Iter \t Dual Residual \t Dual step-size \t Dual full step norm \t Local Residuals"
-            print "%3d  \t %3d  \t %.5E          \t %.5E           \t %.5E                \t %.5E" %  (time, iter_dual, NormResidual,  tstep,  NormStepDual, LocalResidual)
+            print "%3d  \t %3d  \t %.5E     \t %.5E           \t %.5E                \t %.5E" %  (time, iter_dual, NormResidual,  tstep,  NormStepDual, LocalResidual)
                                     	 
 
 
