@@ -30,9 +30,13 @@ from matplotlib import interactive
 interactive(True)
 import scipy.io
 
-import DistWTG
-reload(DistWTG)
-from DistWTG import *
+import DistWTGCPLEX
+reload(DistWTGCPLEX)
+from DistWTGCPLEX import *
+
+#import DistWTG
+#reload(DistWTG)
+#from DistWTG import *
 
 
 Nturbine = 4
@@ -190,12 +194,12 @@ ScaleLocalCost = 1/W0**3
 #Cost function
 Cost  = (T.Inputs['Tg'] - T.InputsPrev['Tg'])**2                # Torque variation
 Cost += T.Inputs['dbeta']**2                                    # Pitch  rate
-Cost += -Cp*T.Wind**3                                           # Power  capture
+Cost += (1e3-Cp*T.Wind)*T.Wind**2                               # Power  capture
 
-Cost += 2*T.Slacks['sOg']**2
+Cost += T.Slacks['sOg']**2
 
-CostTerminal = -Cp*T.Wind**3
-CostTerminal += 2*T.Slacks['sOg']**2
+CostTerminal = (1e3-Cp*T.Wind)*T.Wind**2 
+CostTerminal += T.Slacks['sOg']**2
 
 Cost         *= ScaleLocalCost
 CostTerminal *= ScaleLocalCost
@@ -250,6 +254,9 @@ F.ubV['Turbine',:,'Inputs',:,'dbeta'] =  dbetamax
 F.lbV['Turbine',:,'Inputs',:,'Tg']    =  Tgmin*ScaleT
 F.ubV['Turbine',:,'Inputs',:,'Tg']    =  Tgmax*ScaleT
 
+F.lbV['Turbine',:,'Slacks'] = -1e20 # (No lower bound for pure L2 penalties)
+
+
 #Insert multiple simulations here !!
 STY = [':','-']
 for iweight, PowerSmoothingWeight in enumerate([0., 1e-2]):
@@ -298,6 +305,7 @@ for iweight, PowerSmoothingWeight in enumerate([0., 1e-2]):
                        ALog            = []
                        GapLog          = []
                        MuCheckLog      = []
+                       Rlog            = []
                        
                        for k in range(Nsimulation):
                        
@@ -312,19 +320,19 @@ for iweight, PowerSmoothingWeight in enumerate([0., 1e-2]):
                                               if k > 0:
                                                    F.EP['Turbine',:,'States0'] = StatePlusDistributed
                                                    
-                                              PrimalDistributed, AdjointsDistributed, Dual, Residual, StepSize, Status, CondHess, Error, A, Mu, Gap, MuCheck, QPs = F.DistributedSQP(PrimalDistributed, AdjointsDistributed, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1, FullDualStep = True, ReUpdate = True)
+                                              PrimalDistributed, AdjointsDistributed, Dual, Residual, StepSize, Status, CondHess, Error, A, Mu, Gap, QPs, R = F.DistributedSQP(PrimalDistributed, AdjointsDistributed, Dual, WProfiles, time = k, iter_Dual = 1, iter_SQP = 1, FullDualStep = True, ReUpdate = True)
                                               
                                               ## Logger
                                               AdjointLog.append(np.array(AdjointsDistributed.cat))
                                               MuLog.append(Mu)
                                               GapLog.append(Gap)
-                                              MuCheckLog.append(MuCheck)
                                               ResidualLog.append(float(np.sqrt(np.dot(Residual.T,Residual))))
                                               StepSizeLog.append(StepSize)
                                               StatusLog.append(Status)
                                               CondLog.append(CondHess)
                                               ErrorLog.append(Error)
                                               DualLog.append(np.array(Dual.T))
+                                              Rlog.append(R)
                                                                      
                                               #Store
                                               for i in range(Nturbine):
@@ -351,9 +359,9 @@ for iweight, PowerSmoothingWeight in enumerate([0., 1e-2]):
                                               PrimalDistributed, AdjointsDistributed, _ = F.Shift(PrimalDistributed, AdjointsDistributed, Dual)
                                               
                                               
-                       F.PlotPaper(T, F.StorageDistributed, timeNMPC, col = 'k', style = STY[iweight], savePath = '/Users/sebastien/Desktop/OPTICON/Publications/ECC2014/GP/Figures', DataName = 'Distributed'+str(log10(1/F.EP['PowerSmoothingWeight'])))
+                       F.PlotPaper(T, F.StorageDistributed, timeNMPC, col = 'k', style = STY[iweight], savePath = '/Users/sebastien/Desktop/OPTICON/Publications/ECC2014/GP/Figures2', DataName = 'Distributed'+str(log10(1/F.EP['PowerSmoothingWeight'])))
                        if iweight > 0:
-                           F.PlotPaper(T, F.StorageCentral    , timeNMPC, col = 'k', style = '--', savePath = '/Users/sebastien/Desktop/OPTICON/Publications/ECC2014/GP/Figures', DataName = 'Central'+str(log10(1/F.EP['PowerSmoothingWeight'])))
+                           F.PlotPaper(T, F.StorageCentral    , timeNMPC, col = 'k', style = '--', savePath = '/Users/sebastien/Desktop/OPTICON/Publications/ECC2014/GP/Figures2', DataName = 'Central'+str(log10(1/F.EP['PowerSmoothingWeight'])))
 
 
 

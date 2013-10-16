@@ -623,19 +623,24 @@ class WindFarm:
         
             H = DMatrix(solver[ 'H'].output())
             
-            ######  Regularization ######
-            #R = 0
-            Eig, D  = linalg.eig(H)                
-            R = np.min(np.real(Eig))-1e-4
-            Rlog.append(R)
+            ######  Regularization Brute Force ######
+            ##R = 0
+            #Eig, D  = linalg.eig(H)                
+            #R = np.min(np.real(Eig))-1e-4
+            #Rlog.append(R)
+            #
+            #IndexReg = range(H.shape[0])
+            #Reg = [0 for index in range(H.shape[0])]
+            #for index in IndexReg:
+            #    Reg[index] = 1.
+            #
+            #HReg     = H - R*np.diag(Reg)
+            ########################################
             
-            IndexReg = range(H.shape[0])
-            Reg = [0 for index in range(H.shape[0])]
-            for index in IndexReg:
-                Reg[index] = 1.
-
-            HReg     = H - R*np.diag(Reg)
-            ##############################
+            ######  Regularization Gerschgorin ######
+            self.H = H
+            HReg     = RegularizeMatrix(np.array(H))
+            
                     
             QPs.append({
                         'H'  : HReg,
